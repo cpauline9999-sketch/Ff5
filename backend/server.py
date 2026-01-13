@@ -106,11 +106,11 @@ async def run_automation_task(order_id: str, player_uid: str, diamond_amount: in
             {"$set": {"status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()}}
         )
         
-        # Run Node.js Puppeteer automation
+        # Run Node.js Puppeteer automation (V2 with improved selectors)
         import subprocess
         import json
         
-        script_path = os.path.join(os.path.dirname(__file__), 'garena_puppeteer.js')
+        script_path = os.path.join(os.path.dirname(__file__), 'garena_automation_v2.js')
         config_json = json.dumps({"playerUid": player_uid, "diamondAmount": diamond_amount})
         
         logger.info(f"Running Node.js automation for order {order_id}")
