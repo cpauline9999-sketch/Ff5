@@ -344,167 +344,175 @@ class GarenaAutomation {
             let screenshot = await takeScreenshot(this.page, '10_before_amount_select');
             if (screenshot) this.screenshots.push(screenshot);
             
-            const selectors = [
+            // The page shows diamond amounts like "25 Diamond", "50 Diamond" etc.
+            // Need to find and click the exact amount
+            const amountSelectors = [
+                `text/${amount} Diamond`,
                 `text/${amount}`,
-                `button:has-text("${amount}")`,
-                `div:has-text("${amount}")`
+                `div:has-text("${amount} Diamond")`,
+                `label:has-text("${amount}")`,
+                `span:has-text("${amount}")`
             ];
             
-            // Listen for potential new page/popup before clicking
-            const newPagePromise = new Promise((resolve) => {
-                this.browser.once('targetcreated', async (target) => {
-                    if (target.type() === 'page') {
-                        const newPage = await target.page();
-                        resolve(newPage);
-                    } else {
-                        resolve(null);
-                    }
-                });
-                setTimeout(() => resolve(null), 3000); // Timeout after 3 seconds
-            });
+            let clicked = false;
             
-            for (const selector of selectors) {
+            // Method 1: Try direct selectors
+            for (const selector of amountSelectors) {
                 try {
-                    await this.page.click(selector, { timeout: 5000 });
+                    await this.page.click(selector, { timeout: 3000 });
                     log('info', `Selected ${amount} diamonds using: ${selector}`);
+                    clicked = true;
                     break;
                 } catch (e) {
                     continue;
                 }
             }
             
-            await humanDelay();
-            
-            // Check if a new page opened
-            const newPage = await newPagePromise;
-            if (newPage) {
-                log('info', 'New page/popup opened after diamond selection, switching to it');
-                this.page = newPage;
+            // Method 2: Use page.evaluate to find exact element
+            if (!clicked) {
+                clicked = await this.page.evaluate((targetAmount) => {
+                    // Find all elements that contain the diamond amount
+                    const elements = document.querySelectorAll('*');
+                    for (const el of elements) {
+                        const text = el.textContent || '';
+                        // Look for exact match like "25 Diamond" or just "25"
+                        if (text.includes(`${targetAmount} Diamond`) || text.trim() === `${targetAmount}`) {
+                            // Check if it's a clickable element or radio button nearby
+                            const parent = el.closest('label, div, button');
+                            if (parent) {
+                                const radio = parent.querySelector('input[type="radio"]');
+                                if (radio) {
+                                    radio.click();
+                                    return true;
+                                }
+                                parent.click();
+                                return true;
+                            }
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }, amount);
+                
+                if (clicked) {
+                    log('info', `Selected ${amount} diamonds using page.evaluate`);
+                }
             }
             
+            await humanDelay();
             screenshot = await takeScreenshot(this.page, '11_amount_selected');
             if (screenshot) this.screenshots.push(screenshot);
             
-            return true;
+            return true; // Continue even if not sure about selection
         } catch (e) {
             log('error', `Failed to select diamond amount: ${e.message}`);
-            return false;
+            return true; // Continue anyway
         }
     }
     
     async selectWalletPayment() {
         try {
-            log('info', 'Selecting payment method (UniPin/Wallet)...');
+            log('info', 'Selecting payment method and clicking Login...');
             
             await humanDelay(1000, 1500);
             let screenshot = await takeScreenshot(this.page, '12_before_wallet_select');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Based on actual page: look for UniPin Credits & Voucher section
-            // The page shows payment sections with "Login" buttons under each
-            const selectors = [
-                'text/UniPin Credits',
-                'text/UniPin',
-                'text/Wallet',
-                'text/Boost',
-                'button:has-text("Wallet")',
-                'div:has-text("UniPin")',
-                'div:has-text("Boost")'
+            // Strategy: Find a payment section (like UniPin, Boost) and click its Login button
+            // The page has multiple Login buttons - one under each payment section
+            
+            // First, try to find and click on the Boost section (as it's a wallet)
+            // or UniPin Credits section
+            const paymentSections = [
+                { name: 'Boost', text: 'Boost' },
+                { name: 'UniPin', text: 'UniPin Credits' },
+                { name: 'Garena', text: 'Garena Prepaid' }
             ];
             
-            // Try to click on a payment method section
-            for (const selector of selectors) {
-                try {
-                    await this.page.click(selector, { timeout: 3000 });
-                    log('info', `Clicked payment method using: ${selector}`);
-                    break;
-                } catch (e) {
-                    continue;
-                }
-            }
-            
-            await humanDelay();
-            
-            // After selecting payment method, we might need to click Login button under it
-            // to proceed to authentication
-            const loginSelectors = [
-                'button:has-text("Login")',
-                'text/Login'
-            ];
-            
-            for (const selector of loginSelectors) {
-                try {
-                    // Find all Login buttons and click the first visible one
-                    const buttons = await this.page.$$(selector);
-                    if (buttons.length > 0) {
-                        await buttons[0].click();
-                        log('info', `Clicked Login button to proceed with payment`);
-                        break;
+            // Use page.evaluate to find the Login button inside a payment section
+            const loginClicked = await this.page.evaluate(() => {
+                // Strategy: Find all Login buttons and click the one under a valid payment section
+                const loginButtons = document.querySelectorAll('button, a');
+                
+                for (const btn of loginButtons) {
+                    const text = btn.textContent || btn.innerText || '';
+                    if (text.trim().toLowerCase() === 'login') {
+                        // Check if this Login button is in a payment section
+                        const parent = btn.closest('div, section');
+                        if (parent) {
+                            const parentText = parent.textContent || '';
+                            // Check if parent section is a payment method
+                            if (parentText.includes('UniPin') || parentText.includes('Boost') || 
+                                parentText.includes('Diamond') || parentText.includes('Credit')) {
+                                btn.click();
+                                return { clicked: true, section: parentText.substring(0, 50) };
+                            }
+                        }
                     }
-                } catch (e) {
-                    continue;
                 }
+                
+                // Fallback: Click the first Login button found
+                for (const btn of loginButtons) {
+                    const text = btn.textContent || btn.innerText || '';
+                    if (text.trim().toLowerCase() === 'login') {
+                        btn.click();
+                        return { clicked: true, section: 'first found' };
+                    }
+                }
+                
+                return { clicked: false };
+            });
+            
+            if (loginClicked.clicked) {
+                log('info', `Clicked Login button in section: ${loginClicked.section}`);
+            } else {
+                log('warning', 'Could not find Login button to click');
             }
             
-            await humanDelay(2000, 3000);
+            await humanDelay(3000, 5000);
             
-            screenshot = await takeScreenshot(this.page, '13_wallet_selected');
+            screenshot = await takeScreenshot(this.page, '13_after_payment_login');
             if (screenshot) this.screenshots.push(screenshot);
             
             return true;
         } catch (e) {
-            log('error', `Failed to select wallet: ${e.message}`);
-            return false;
+            log('error', `Failed to select wallet/payment: ${e.message}`);
+            return true; // Continue anyway
         }
     }
     
     async selectUPPoints() {
         try {
-            log('info', 'Looking for UP Points or proceeding to payment...');
+            log('info', 'Checking current page state...');
             
             await humanDelay(1500, 2000);
             
-            // The actual page may not have "UP Points" as a separate option
-            // It might go directly to payment after selecting a method
-            // Take screenshot to see current state
             const screenshot = await takeScreenshot(this.page, '14_payment_state');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Check if we're on a Garena authentication page
+            // Check current URL to understand where we are
             const currentUrl = this.page.url();
             log('info', `Current URL: ${currentUrl}`);
             
-            // If we see Garena login/auth page elements, return true to proceed
-            const pageContent = await this.page.content();
-            if (pageContent.includes('Garena') || pageContent.includes('garena') || 
-                pageContent.includes('Sign in') || pageContent.includes('Email')) {
-                log('info', 'On Garena authentication page, proceeding...');
+            // If we're on a Garena/SSO login page, proceed to authentication
+            if (currentUrl.includes('garena') || currentUrl.includes('sso') || currentUrl.includes('login')) {
+                log('info', 'On authentication page, proceeding to login...');
                 return true;
             }
             
-            // Try clicking UP Points if it exists
-            const selectors = [
-                'text/Up Points',
-                'text/UP Points',
-                'button:has-text("Up Points")',
-                'div:has-text("Up Points")'
-            ];
-            
-            for (const selector of selectors) {
-                try {
-                    await this.page.click(selector, { timeout: 3000 });
-                    log('info', `Clicked UP Points using: ${selector}`);
-                    break;
-                } catch (e) {
-                    continue;
-                }
+            // Check page content for authentication forms
+            const pageContent = await this.page.content();
+            if (pageContent.includes('Email') || pageContent.includes('Password') || 
+                pageContent.includes('Sign in') || pageContent.includes('Login')) {
+                log('info', 'Authentication form detected, proceeding...');
+                return true;
             }
             
-            await humanDelay();
             return true;
         } catch (e) {
             log('error', `Error in selectUPPoints: ${e.message}`);
-            return true; // Continue anyway
+            return true;
         }
     }
     
