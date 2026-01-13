@@ -341,51 +341,49 @@ class GarenaAutomation {
             log('info', `Selecting ${amount} diamonds...`);
             
             await humanDelay(1000, 1500);
-            let screenshot = await takeScreenshot(this.page, '10_before_amount_select');
-            if (screenshot) this.screenshots.push(screenshot);
+            let screenshot;
+            try {
+                screenshot = await takeScreenshot(this.page, '10_before_amount_select');
+                if (screenshot) this.screenshots.push(screenshot);
+            } catch (e) {
+                log('warning', `Screenshot error: ${e.message}`);
+            }
             
-            // First scroll down to see all options
-            await this.page.evaluate(() => {
-                window.scrollBy(0, 300);
-            });
-            await humanDelay(500, 1000);
-            
-            // The page shows diamond amounts like "25 Diamond", "50 Diamond" etc.
-            // Need to find and click the exact amount
+            // The page shows diamond amounts inside payment sections
+            // We need to find the exact "25 Diamond" option and click it
             const clicked = await this.page.evaluate((targetAmount) => {
-                // Find all elements that contain the diamond amount
+                // Strategy 1: Find elements that match "25 Diamond" pattern
                 const allElements = document.querySelectorAll('*');
                 
-                // Strategy 1: Find exact match "25 Diamond"
                 for (const el of allElements) {
                     const text = (el.textContent || '').trim();
-                    if (text.includes(`${targetAmount} Diamond`)) {
-                        // Check if it's a clickable element
-                        const parent = el.closest('label, div[role="button"], button, li');
-                        if (parent) {
-                            const radio = parent.querySelector('input[type="radio"]');
-                            if (radio) {
-                                radio.click();
-                                return { clicked: true, method: 'radio in parent' };
-                            }
-                            parent.click();
-                            return { clicked: true, method: 'parent click' };
+                    
+                    // Match patterns like "25 Diamond", "25Diamond", "25 Diamonds"
+                    const pattern = new RegExp(`^${targetAmount}\\s*Diamond`, 'i');
+                    if (pattern.test(text)) {
+                        // This element or its parent should be clickable
+                        const clickTarget = el.closest('div[role="button"], label, li, button') || el;
+                        
+                        // Check if there's a radio button
+                        const radio = clickTarget.querySelector('input[type="radio"]') || 
+                                       el.closest('label')?.querySelector('input[type="radio"]');
+                        if (radio) {
+                            radio.click();
+                            return { clicked: true, method: 'radio', text: text.substring(0, 50) };
                         }
-                        el.click();
-                        return { clicked: true, method: 'direct click' };
+                        
+                        clickTarget.click();
+                        return { clicked: true, method: 'element click', text: text.substring(0, 50) };
                     }
                 }
                 
-                // Strategy 2: Look for elements with just the number that are selectable
+                // Strategy 2: Look for elements with just the number that might be selectable
                 for (const el of allElements) {
                     const text = (el.textContent || '').trim();
-                    // Match "25" or "25 " at the beginning
-                    if (text.startsWith(`${targetAmount}`) && text.length < 20) {
-                        const parent = el.closest('label, div, button');
-                        if (parent) {
-                            parent.click();
-                            return { clicked: true, method: 'number match' };
-                        }
+                    if (text === `${targetAmount}` || text === `${targetAmount} `) {
+                        const clickTarget = el.closest('div, label, li, button') || el;
+                        clickTarget.click();
+                        return { clicked: true, method: 'number only', text: text };
                     }
                 }
                 
@@ -393,168 +391,196 @@ class GarenaAutomation {
             }, amount);
             
             if (clicked.clicked) {
-                log('info', `Selected ${amount} diamonds using: ${clicked.method}`);
+                log('info', `Selected ${amount} diamonds using: ${clicked.method} (${clicked.text})`);
             } else {
-                log('warning', `Could not find ${amount} diamond option`);
+                log('warning', `Could not find exact ${amount} diamond option`);
             }
             
-            await humanDelay();
-            screenshot = await takeScreenshot(this.page, '11_amount_selected');
-            if (screenshot) this.screenshots.push(screenshot);
+            await humanDelay(500, 1000);
             
-            return true; // Continue even if not sure about selection
-        } catch (e) {
-            log('error', `Failed to select diamond amount: ${e.message}`);
-            return true; // Continue anyway
-        }
-    }
-    
-    async selectWalletPayment() {
-        try {
-            log('info', 'Looking for payment section and Login button...');
-            
-            await humanDelay(1000, 1500);
-            
-            // Take screenshot before scrolling
             try {
-                let screenshot = await takeScreenshot(this.page, '12_before_payment_select');
+                screenshot = await takeScreenshot(this.page, '11_amount_selected');
                 if (screenshot) this.screenshots.push(screenshot);
             } catch (e) {
                 log('warning', `Screenshot error: ${e.message}`);
             }
             
-            // Check page is still valid
+            return true;
+        } catch (e) {
+            log('error', `Failed to select diamond amount: ${e.message}`);
+            return true;
+        }
+    }
+    
+    async selectWalletPayment() {
+        try {
+            log('info', 'Looking for payment section and clicking to initiate purchase...');
+            
+            await humanDelay(1000, 1500);
+            
+            // Take screenshot
+            let screenshot;
+            try {
+                screenshot = await takeScreenshot(this.page, '12_before_payment_select');
+                if (screenshot) this.screenshots.push(screenshot);
+            } catch (e) {
+                log('warning', `Screenshot error: ${e.message}`);
+            }
+            
+            // Get current URL
             let currentUrl;
             try {
                 currentUrl = this.page.url();
-                log('info', `Current URL before scroll: ${currentUrl}`);
+                log('info', `Current URL: ${currentUrl}`);
             } catch (e) {
-                log('error', 'Page appears to have closed, trying to recover...');
-                const pages = await this.browser.pages();
-                if (pages.length > 0) {
-                    this.page = pages[pages.length - 1];
-                    currentUrl = this.page.url();
-                    log('info', `Recovered to page: ${currentUrl}`);
-                }
+                log('warning', 'Could not get current URL');
             }
             
             // Set up listener for new pages/popups BEFORE clicking
             const pagePromise = new Promise(resolve => {
                 const handler = async target => {
                     if (target.type() === 'page') {
-                        const newPage = await target.page();
-                        resolve(newPage);
+                        try {
+                            const newPage = await target.page();
+                            resolve(newPage);
+                        } catch (e) {
+                            resolve(null);
+                        }
                     }
                 };
                 this.browser.on('targetcreated', handler);
-                // Timeout after 10 seconds
                 setTimeout(() => {
                     this.browser.off('targetcreated', handler);
                     resolve(null);
-                }, 10000);
+                }, 15000);
             });
             
-            // Don't scroll - just click the Login button directly
-            // Use page.evaluate to find and click Login button
-            log('info', 'Looking for Login button under payment section...');
+            // Strategy: The UniPin section has a "Login" button that should 
+            // trigger Garena SSO authentication
+            // Let's click on the Login button under UniPin
+            log('info', 'Clicking Login button under UniPin section...');
             
             try {
-                const loginClicked = await this.page.evaluate(() => {
-                    // Find all Login buttons/links
-                    const allElements = document.querySelectorAll('button, a, div[role="button"]');
-                    const loginButtons = [];
+                // First, try clicking on a specific payment option that includes "Login"
+                const clickResult = await this.page.evaluate(() => {
+                    // Find all elements containing "Login"
+                    const loginElements = [];
+                    const allElements = document.querySelectorAll('button, a, div[role="button"], span');
                     
                     for (const el of allElements) {
-                        const text = (el.textContent || el.innerText || '').trim().toLowerCase();
-                        if (text === 'login') {
-                            loginButtons.push(el);
-                        }
-                    }
-                    
-                    // Try to click a Login button that's in a payment section
-                    for (const btn of loginButtons) {
-                        const parent = btn.closest('div, section, article');
-                        if (parent) {
-                            const parentText = (parent.textContent || '').toLowerCase();
-                            if (parentText.includes('unipin') || parentText.includes('boost') || 
-                                parentText.includes('diamond') || parentText.includes('credit') ||
-                                parentText.includes('prepaid') || parentText.includes('razer')) {
-                                btn.click();
-                                return { clicked: true, section: parentText.substring(0, 50) };
+                        const text = (el.textContent || el.innerText || '').trim();
+                        if (text.toLowerCase() === 'login') {
+                            // Check if it's in a UniPin or payment section
+                            const section = el.closest('div');
+                            if (section) {
+                                const sectionText = section.textContent || '';
+                                loginElements.push({
+                                    element: el,
+                                    section: sectionText.substring(0, 100),
+                                    isUniPin: sectionText.includes('UniPin')
+                                });
                             }
                         }
                     }
                     
-                    // Fallback: Click a Login button (skip the Player ID one at the top)
-                    if (loginButtons.length > 1) {
-                        loginButtons[1].click();
-                        return { clicked: true, section: 'second login button' };
-                    } else if (loginButtons.length === 1) {
-                        loginButtons[0].click();
-                        return { clicked: true, section: 'only login button' };
+                    // Prioritize UniPin login
+                    for (const item of loginElements) {
+                        if (item.isUniPin) {
+                            item.element.click();
+                            return { clicked: true, section: 'UniPin' };
+                        }
+                    }
+                    
+                    // Fallback to any login button that's not the player ID one
+                    // The player ID login is usually at the top with "Or login with your game account" text
+                    for (const item of loginElements) {
+                        if (!item.section.includes('player ID') && !item.section.includes('Or login with your game account')) {
+                            item.element.click();
+                            return { clicked: true, section: item.section.substring(0, 50) };
+                        }
+                    }
+                    
+                    // If we still haven't clicked, try clicking a payment method card/option
+                    const paymentOptions = document.querySelectorAll('[data-payment], .payment-option, .payment-method');
+                    if (paymentOptions.length > 0) {
+                        paymentOptions[0].click();
+                        return { clicked: true, section: 'payment-option' };
                     }
                     
                     return { clicked: false };
                 });
                 
-                if (loginClicked && loginClicked.clicked) {
-                    log('info', `Clicked Login button in section: ${loginClicked.section}`);
+                if (clickResult.clicked) {
+                    log('info', `Clicked in section: ${clickResult.section}`);
                 } else {
-                    log('warning', 'Could not find Login button to click');
+                    log('warning', 'Could not find appropriate Login button');
                 }
             } catch (e) {
                 log('error', `Error clicking Login: ${e.message}`);
             }
             
-            // Wait for new page to open
-            log('info', 'Waiting for new page/popup to open...');
+            // Wait for navigation or new page
+            log('info', 'Waiting for navigation or new page...');
+            
+            // First wait for potential new page
             const newPage = await pagePromise;
             
             if (newPage) {
-                log('info', 'New page/popup opened! Switching to it...');
+                log('info', 'New page opened! Switching to it...');
                 this.page = newPage;
                 try {
                     await this.page.setViewport({ width: 1920, height: 1080 });
+                    await humanDelay(3000, 5000);
+                    const newUrl = this.page.url();
+                    log('info', `New page URL: ${newUrl}`);
                 } catch (e) {
-                    log('warning', `Could not set viewport: ${e.message}`);
+                    log('warning', `Error setting up new page: ${e.message}`);
                 }
-                await humanDelay(2000, 3000);
             } else {
-                log('info', 'No new page opened after 10 seconds');
-                await humanDelay(2000, 3000);
-            }
-            
-            // Check all pages and switch to the active one
-            try {
-                const pages = await this.browser.pages();
-                log('info', `Total browser pages: ${pages.length}`);
+                // No new page - check if current page navigated
+                await humanDelay(5000, 7000);
                 
-                if (pages.length > 0) {
-                    // Find a valid page that's not closed
+                try {
+                    // Check all pages
+                    const pages = await this.browser.pages();
+                    log('info', `Total browser pages: ${pages.length}`);
+                    
                     for (let i = pages.length - 1; i >= 0; i--) {
                         try {
-                            const url = pages[i].url();
-                            if (url && !pages[i].isClosed()) {
+                            const pageUrl = pages[i].url();
+                            log('info', `Page ${i} URL: ${pageUrl}`);
+                            
+                            // Look for SSO/login page
+                            if (pageUrl.includes('sso') || pageUrl.includes('login') || pageUrl.includes('account')) {
                                 this.page = pages[i];
-                                log('info', `Switched to page ${i}: ${url}`);
+                                log('info', `Found auth page at index ${i}`);
                                 break;
                             }
                         } catch (e) {
-                            continue;
+                            log('warning', `Page ${i} may be closed: ${e.message}`);
                         }
                     }
+                    
+                    // Get current page URL
+                    currentUrl = this.page.url();
+                    log('info', `Current page URL after wait: ${currentUrl}`);
+                } catch (e) {
+                    log('error', `Error checking pages: ${e.message}`);
                 }
-                
-                const screenshot = await takeScreenshot(this.page, '13_after_payment_login');
+            }
+            
+            // Take final screenshot
+            try {
+                screenshot = await takeScreenshot(this.page, '13_after_payment_login');
                 if (screenshot) this.screenshots.push(screenshot);
             } catch (e) {
-                log('warning', `Error after clicking Login: ${e.message}`);
+                log('warning', `Screenshot error: ${e.message}`);
             }
             
             return true;
         } catch (e) {
             log('error', `Failed to select wallet/payment: ${e.message}`);
-            return true; // Continue anyway
+            return true;
         }
     }
     
