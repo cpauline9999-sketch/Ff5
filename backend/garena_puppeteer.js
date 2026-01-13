@@ -350,40 +350,54 @@ class GarenaAutomation {
             }
             
             // The page shows diamond amounts inside payment sections
-            // We need to find the exact "25 Diamond" option and click it
+            // We need to find the SPECIFIC "25 Diamond" option and click its radio button or label
             const clicked = await this.page.evaluate((targetAmount) => {
-                // Strategy 1: Find elements that match "25 Diamond" pattern
-                const allElements = document.querySelectorAll('*');
-                
-                for (const el of allElements) {
-                    const text = (el.textContent || '').trim();
+                // Strategy 1: Find radio buttons/inputs with value matching the amount
+                const radioInputs = document.querySelectorAll('input[type="radio"]');
+                for (const radio of radioInputs) {
+                    const value = radio.value || '';
+                    const label = radio.closest('label') || document.querySelector(`label[for="${radio.id}"]`);
+                    const labelText = label ? (label.textContent || '') : '';
                     
-                    // Match patterns like "25 Diamond", "25Diamond", "25 Diamonds"
-                    const pattern = new RegExp(`^${targetAmount}\\s*Diamond`, 'i');
-                    if (pattern.test(text)) {
-                        // This element or its parent should be clickable
-                        const clickTarget = el.closest('div[role="button"], label, li, button') || el;
-                        
-                        // Check if there's a radio button
-                        const radio = clickTarget.querySelector('input[type="radio"]') || 
-                                       el.closest('label')?.querySelector('input[type="radio"]');
-                        if (radio) {
-                            radio.click();
-                            return { clicked: true, method: 'radio', text: text.substring(0, 50) };
-                        }
-                        
-                        clickTarget.click();
-                        return { clicked: true, method: 'element click', text: text.substring(0, 50) };
+                    // Check if this radio is for our target amount
+                    if (value.includes(`${targetAmount}`) || labelText.includes(`${targetAmount} Diamond`)) {
+                        radio.click();
+                        return { clicked: true, method: 'radio input', text: labelText.substring(0, 30) };
                     }
                 }
                 
-                // Strategy 2: Look for elements with just the number that might be selectable
-                for (const el of allElements) {
+                // Strategy 2: Find specific labels/divs with ONLY the target amount text
+                const allLabels = document.querySelectorAll('label, div[role="option"], li');
+                for (const el of allLabels) {
                     const text = (el.textContent || '').trim();
-                    if (text === `${targetAmount}` || text === `${targetAmount} `) {
-                        const clickTarget = el.closest('div, label, li, button') || el;
-                        clickTarget.click();
-                        return { clicked: true, method: 'number only', text: text };
+                    
+                    // Look for exact patterns like "25 Diamond" at the START of text
+                    // Avoid matching containers with multiple options
+                    if (text.startsWith(`${targetAmount} Diamond`) && !text.includes(`${targetAmount+25} Diamond`)) {
+                        // Check if there's a radio button inside
+                        const radio = el.querySelector('input[type="radio"]');
+                        if (radio) {
+                            radio.click();
+                            return { clicked: true, method: 'label radio', text: text.substring(0, 30) };
+                        }
+                        
+                        el.click();
+                        return { clicked: true, method: 'label click', text: text.substring(0, 30) };
+                    }
+                }
+                
+                // Strategy 3: Find elements where text content is EXACTLY "25 Diamond" or similar
+                const spans = document.querySelectorAll('span, p, div');
+                for (const el of spans) {
+                    const directText = el.childNodes[0]?.textContent?.trim() || '';
+                    
+                    if (directText === `${targetAmount} Diamond` || directText === `${targetAmount}`) {
+                        // Click the parent element that should be a clickable option
+                        const clickTarget = el.closest('[role="option"], [role="button"], label, li, button') || el.parentElement;
+                        if (clickTarget) {
+                            clickTarget.click();
+                            return { clicked: true, method: 'exact text', text: directText };
+                        }
                     }
                 }
                 
