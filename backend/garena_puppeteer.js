@@ -806,9 +806,6 @@ class GarenaAutomation {
             return false;
         }
     }
-            return false;
-        }
-    }
     
     async verifyTransactionSuccess() {
         try {
