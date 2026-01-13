@@ -414,75 +414,96 @@ class GarenaAutomation {
             log('info', 'Looking for payment section and Login button...');
             
             await humanDelay(1000, 1500);
-            let screenshot = await takeScreenshot(this.page, '12_before_payment_select');
-            if (screenshot) this.screenshots.push(screenshot);
             
-            // First scroll to see more options
-            await this.page.evaluate(() => {
-                window.scrollBy(0, 500);
-            });
-            await humanDelay(500, 1000);
+            // Take screenshot before scrolling
+            try {
+                let screenshot = await takeScreenshot(this.page, '12_before_payment_select');
+                if (screenshot) this.screenshots.push(screenshot);
+            } catch (e) {
+                log('warning', `Screenshot error: ${e.message}`);
+            }
             
-            screenshot = await takeScreenshot(this.page, '12b_scrolled');
-            if (screenshot) this.screenshots.push(screenshot);
+            // Check page is still valid
+            let currentUrl;
+            try {
+                currentUrl = this.page.url();
+                log('info', `Current URL before scroll: ${currentUrl}`);
+            } catch (e) {
+                log('error', 'Page appears to have closed, trying to recover...');
+                const pages = await this.browser.pages();
+                if (pages.length > 0) {
+                    this.page = pages[pages.length - 1];
+                    currentUrl = this.page.url();
+                    log('info', `Recovered to page: ${currentUrl}`);
+                }
+            }
             
             // Set up listener for new pages/popups BEFORE clicking
             const pagePromise = new Promise(resolve => {
-                this.browser.once('targetcreated', async target => {
+                const handler = async target => {
                     if (target.type() === 'page') {
                         const newPage = await target.page();
                         resolve(newPage);
-                    } else {
-                        resolve(null);
                     }
-                });
+                };
+                this.browser.on('targetcreated', handler);
                 // Timeout after 10 seconds
-                setTimeout(() => resolve(null), 10000);
+                setTimeout(() => {
+                    this.browser.off('targetcreated', handler);
+                    resolve(null);
+                }, 10000);
             });
             
+            // Don't scroll - just click the Login button directly
             // Use page.evaluate to find and click Login button
-            const loginClicked = await this.page.evaluate(() => {
-                // Find all Login buttons/links
-                const allElements = document.querySelectorAll('button, a, div[role="button"]');
-                const loginButtons = [];
-                
-                for (const el of allElements) {
-                    const text = (el.textContent || el.innerText || '').trim().toLowerCase();
-                    if (text === 'login') {
-                        loginButtons.push(el);
-                    }
-                }
-                
-                // Try to click a Login button that's in a payment section
-                for (const btn of loginButtons) {
-                    const parent = btn.closest('div, section, article');
-                    if (parent) {
-                        const parentText = (parent.textContent || '').toLowerCase();
-                        if (parentText.includes('unipin') || parentText.includes('boost') || 
-                            parentText.includes('diamond') || parentText.includes('credit') ||
-                            parentText.includes('prepaid') || parentText.includes('razer')) {
-                            btn.click();
-                            return { clicked: true, section: parentText.substring(0, 50) };
+            log('info', 'Looking for Login button under payment section...');
+            
+            try {
+                const loginClicked = await this.page.evaluate(() => {
+                    // Find all Login buttons/links
+                    const allElements = document.querySelectorAll('button, a, div[role="button"]');
+                    const loginButtons = [];
+                    
+                    for (const el of allElements) {
+                        const text = (el.textContent || el.innerText || '').trim().toLowerCase();
+                        if (text === 'login') {
+                            loginButtons.push(el);
                         }
                     }
-                }
+                    
+                    // Try to click a Login button that's in a payment section
+                    for (const btn of loginButtons) {
+                        const parent = btn.closest('div, section, article');
+                        if (parent) {
+                            const parentText = (parent.textContent || '').toLowerCase();
+                            if (parentText.includes('unipin') || parentText.includes('boost') || 
+                                parentText.includes('diamond') || parentText.includes('credit') ||
+                                parentText.includes('prepaid') || parentText.includes('razer')) {
+                                btn.click();
+                                return { clicked: true, section: parentText.substring(0, 50) };
+                            }
+                        }
+                    }
+                    
+                    // Fallback: Click a Login button (skip the Player ID one at the top)
+                    if (loginButtons.length > 1) {
+                        loginButtons[1].click();
+                        return { clicked: true, section: 'second login button' };
+                    } else if (loginButtons.length === 1) {
+                        loginButtons[0].click();
+                        return { clicked: true, section: 'only login button' };
+                    }
+                    
+                    return { clicked: false };
+                });
                 
-                // Fallback: Click a Login button (skip the Player ID one at the top)
-                if (loginButtons.length > 1) {
-                    loginButtons[1].click();
-                    return { clicked: true, section: 'second login button' };
-                } else if (loginButtons.length === 1) {
-                    loginButtons[0].click();
-                    return { clicked: true, section: 'only login button' };
+                if (loginClicked && loginClicked.clicked) {
+                    log('info', `Clicked Login button in section: ${loginClicked.section}`);
+                } else {
+                    log('warning', 'Could not find Login button to click');
                 }
-                
-                return { clicked: false };
-            });
-            
-            if (loginClicked.clicked) {
-                log('info', `Clicked Login button in section: ${loginClicked.section}`);
-            } else {
-                log('warning', 'Could not find Login button to click');
+            } catch (e) {
+                log('error', `Error clicking Login: ${e.message}`);
             }
             
             // Wait for new page to open
@@ -492,31 +513,42 @@ class GarenaAutomation {
             if (newPage) {
                 log('info', 'New page/popup opened! Switching to it...');
                 this.page = newPage;
-                await this.page.setViewport({ width: 1920, height: 1080 });
+                try {
+                    await this.page.setViewport({ width: 1920, height: 1080 });
+                } catch (e) {
+                    log('warning', `Could not set viewport: ${e.message}`);
+                }
                 await humanDelay(2000, 3000);
             } else {
-                log('info', 'No new page opened, checking current page...');
-                await humanDelay(3000, 5000);
+                log('info', 'No new page opened after 10 seconds');
+                await humanDelay(2000, 3000);
             }
             
-            // Check if page is still valid
+            // Check all pages and switch to the active one
             try {
-                const currentUrl = this.page.url();
-                log('info', `Current URL after clicking Login: ${currentUrl}`);
+                const pages = await this.browser.pages();
+                log('info', `Total browser pages: ${pages.length}`);
                 
-                screenshot = await takeScreenshot(this.page, '13_after_payment_login');
+                if (pages.length > 0) {
+                    // Find a valid page that's not closed
+                    for (let i = pages.length - 1; i >= 0; i--) {
+                        try {
+                            const url = pages[i].url();
+                            if (url && !pages[i].isClosed()) {
+                                this.page = pages[i];
+                                log('info', `Switched to page ${i}: ${url}`);
+                                break;
+                            }
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+                }
+                
+                const screenshot = await takeScreenshot(this.page, '13_after_payment_login');
                 if (screenshot) this.screenshots.push(screenshot);
             } catch (e) {
-                log('warning', `Page might have changed: ${e.message}`);
-                
-                // Try to get the newest page
-                const pages = await this.browser.pages();
-                if (pages.length > 0) {
-                    this.page = pages[pages.length - 1];
-                    log('info', 'Switched to newest page');
-                    const currentUrl = this.page.url();
-                    log('info', `Newest page URL: ${currentUrl}`);
-                }
+                log('warning', `Error after clicking Login: ${e.message}`);
             }
             
             return true;
