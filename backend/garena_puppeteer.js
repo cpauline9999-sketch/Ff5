@@ -417,10 +417,6 @@ class GarenaAutomation {
             let screenshot = await takeScreenshot(this.page, '12_before_payment_select');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // The page has multiple sections like UniPin, Boost, Garena Prepaid
-            // Each section has its own Login button
-            // We need to click on a Login button under a valid payment method
-            
             // First scroll to see more options
             await this.page.evaluate(() => {
                 window.scrollBy(0, 500);
@@ -429,6 +425,20 @@ class GarenaAutomation {
             
             screenshot = await takeScreenshot(this.page, '12b_scrolled');
             if (screenshot) this.screenshots.push(screenshot);
+            
+            // Set up listener for new pages/popups BEFORE clicking
+            const pagePromise = new Promise(resolve => {
+                this.browser.once('targetcreated', async target => {
+                    if (target.type() === 'page') {
+                        const newPage = await target.page();
+                        resolve(newPage);
+                    } else {
+                        resolve(null);
+                    }
+                });
+                // Timeout after 10 seconds
+                setTimeout(() => resolve(null), 10000);
+            });
             
             // Use page.evaluate to find and click Login button
             const loginClicked = await this.page.evaluate(() => {
@@ -444,7 +454,6 @@ class GarenaAutomation {
                 }
                 
                 // Try to click a Login button that's in a payment section
-                // The payment sections contain words like "UniPin", "Boost", "Diamond"
                 for (const btn of loginButtons) {
                     const parent = btn.closest('div, section, article');
                     if (parent) {
@@ -458,9 +467,8 @@ class GarenaAutomation {
                     }
                 }
                 
-                // Fallback: Click the first Login button found (skip the Player ID one)
+                // Fallback: Click a Login button (skip the Player ID one at the top)
                 if (loginButtons.length > 1) {
-                    // Click the second one (first might be Player ID login)
                     loginButtons[1].click();
                     return { clicked: true, section: 'second login button' };
                 } else if (loginButtons.length === 1) {
@@ -477,15 +485,39 @@ class GarenaAutomation {
                 log('warning', 'Could not find Login button to click');
             }
             
-            // Wait for potential page navigation or popup
-            await humanDelay(3000, 5000);
+            // Wait for new page to open
+            log('info', 'Waiting for new page/popup to open...');
+            const newPage = await pagePromise;
             
-            // Check if we navigated to a new page
-            const currentUrl = this.page.url();
-            log('info', `Current URL after clicking Login: ${currentUrl}`);
+            if (newPage) {
+                log('info', 'New page/popup opened! Switching to it...');
+                this.page = newPage;
+                await this.page.setViewport({ width: 1920, height: 1080 });
+                await humanDelay(2000, 3000);
+            } else {
+                log('info', 'No new page opened, checking current page...');
+                await humanDelay(3000, 5000);
+            }
             
-            screenshot = await takeScreenshot(this.page, '13_after_payment_login');
-            if (screenshot) this.screenshots.push(screenshot);
+            // Check if page is still valid
+            try {
+                const currentUrl = this.page.url();
+                log('info', `Current URL after clicking Login: ${currentUrl}`);
+                
+                screenshot = await takeScreenshot(this.page, '13_after_payment_login');
+                if (screenshot) this.screenshots.push(screenshot);
+            } catch (e) {
+                log('warning', `Page might have changed: ${e.message}`);
+                
+                // Try to get the newest page
+                const pages = await this.browser.pages();
+                if (pages.length > 0) {
+                    this.page = pages[pages.length - 1];
+                    log('info', 'Switched to newest page');
+                    const currentUrl = this.page.url();
+                    log('info', `Newest page URL: ${currentUrl}`);
+                }
+            }
             
             return true;
         } catch (e) {
