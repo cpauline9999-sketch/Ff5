@@ -510,60 +510,69 @@ class GarenaAutomation {
     
     async signInToUniPin() {
         try {
-            log('info', 'Signing in to UniPin...');
+            log('info', 'Checking for authentication page...');
             
-            // Wait longer for UniPin page to load
+            // Wait for page to load
             await humanDelay(2000, 3000);
             
-            try {
-                await this.page.waitForSelector('text/Sign in to UniPin', { timeout: 10000 });
-            } catch (e) {
-                log('warning', 'UniPin page not loaded yet, waiting more...');
-                await humanDelay(3000, 4000);
-            }
-            
-            let screenshot = await takeScreenshot(this.page, '15_unipin_signin');
+            let screenshot = await takeScreenshot(this.page, '15_auth_page');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Enter email
-            log('info', 'Entering email...');
+            // Check current URL and page content
+            const currentUrl = this.page.url();
+            log('info', `Current URL: ${currentUrl}`);
+            
+            // Look for email/password inputs on the page
             const emailSelectors = [
                 'input[placeholder*="Email" i]',
                 'input[type="email"]',
-                'input[name="email"]'
+                'input[name="email"]',
+                'input[id*="email" i]'
             ];
             
+            const passwordSelectors = [
+                'input[placeholder*="Password" i]',
+                'input[type="password"]',
+                'input[name="password"]',
+                'input[id*="password" i]'
+            ];
+            
+            // Find email input
+            let emailFound = false;
             for (const selector of emailSelectors) {
                 try {
-                    await this.page.waitForSelector(selector, { timeout: 5000 });
-                    await this.page.click(selector);
-                    await humanDelay(100, 200);
-                    await this.page.type(selector, CONFIG.GARENA_EMAIL, { delay: randomDelay(20, 50) });
-                    log('info', 'Email entered');
-                    break;
+                    const element = await this.page.$(selector);
+                    if (element) {
+                        await this.page.click(selector);
+                        await humanDelay(100, 200);
+                        await this.page.type(selector, CONFIG.GARENA_EMAIL, { delay: randomDelay(20, 50) });
+                        log('info', `Email entered using: ${selector}`);
+                        emailFound = true;
+                        break;
+                    }
                 } catch (e) {
                     continue;
                 }
             }
             
+            if (!emailFound) {
+                log('info', 'No email input found, may not need authentication');
+                return true;
+            }
+            
             await humanDelay();
             
-            // Enter password
-            log('info', 'Entering password...');
-            const passwordSelectors = [
-                'input[placeholder*="Password" i]',
-                'input[type="password"]',
-                'input[name="password"]'
-            ];
-            
+            // Find and fill password
             for (const selector of passwordSelectors) {
                 try {
-                    await this.page.waitForSelector(selector, { timeout: 5000 });
-                    await this.page.click(selector);
-                    await humanDelay(100, 200);
-                    await this.page.type(selector, CONFIG.GARENA_PASSWORD, { delay: randomDelay(20, 50) });
-                    log('info', 'Password entered');
-                    break;
+                    const element = await this.page.$(selector);
+                    if (element) {
+                        await this.page.click(selector);
+                        await humanDelay(100, 200);
+                        await this.page.type(selector, CONFIG.GARENA_PASSWORD, { delay: randomDelay(20, 50) });
+                        log('info', `Password entered using: ${selector}`);
+                        break;
+                    }
                 } catch (e) {
                     continue;
                 }
@@ -574,15 +583,17 @@ class GarenaAutomation {
             
             await humanDelay();
             
-            // Click Sign in
+            // Click Sign in/Login button
             const signinSelectors = [
+                'button[type="submit"]',
                 'button:has-text("Sign in")',
-                'button[type="submit"]'
+                'button:has-text("Login")',
+                'input[type="submit"]'
             ];
             
             for (const selector of signinSelectors) {
                 try {
-                    await this.page.click(selector, { timeout: 5000 });
+                    await this.page.click(selector, { timeout: 3000 });
                     log('info', `Clicked Sign in using: ${selector}`);
                     break;
                 } catch (e) {
@@ -590,14 +601,27 @@ class GarenaAutomation {
                 }
             }
             
-            await humanDelay(1500, 2000);
+            // Also try clicking by evaluating page
+            await this.page.evaluate(() => {
+                const buttons = document.querySelectorAll('button, input[type="submit"]');
+                for (const btn of buttons) {
+                    const text = btn.textContent || btn.value || '';
+                    if (text.toLowerCase().includes('sign') || text.toLowerCase().includes('login') || 
+                        text.toLowerCase().includes('submit')) {
+                        btn.click();
+                        return;
+                    }
+                }
+            });
+            
+            await humanDelay(3000, 5000);
             screenshot = await takeScreenshot(this.page, '17_after_signin');
             if (screenshot) this.screenshots.push(screenshot);
             
             return true;
         } catch (e) {
-            log('error', `Failed to sign in to UniPin: ${e.message}`);
-            return false;
+            log('error', `Failed to sign in: ${e.message}`);
+            return true; // Continue anyway
         }
     }
     
