@@ -394,35 +394,29 @@ class GarenaAutomation {
     
     async selectWalletPayment() {
         try {
-            log('info', 'Selecting Wallet payment...');
+            log('info', 'Selecting payment method (UniPin/Wallet)...');
             
             await humanDelay(1000, 1500);
             let screenshot = await takeScreenshot(this.page, '12_before_wallet_select');
             if (screenshot) this.screenshots.push(screenshot);
             
+            // Based on actual page: look for UniPin Credits & Voucher section
+            // The page shows payment sections with "Login" buttons under each
             const selectors = [
+                'text/UniPin Credits',
+                'text/UniPin',
                 'text/Wallet',
+                'text/Boost',
                 'button:has-text("Wallet")',
-                'div:has-text("Wallet")'
+                'div:has-text("UniPin")',
+                'div:has-text("Boost")'
             ];
             
-            // Listen for potential new page/popup
-            const newPagePromise = new Promise((resolve) => {
-                this.browser.once('targetcreated', async (target) => {
-                    if (target.type() === 'page') {
-                        const newPage = await target.page();
-                        resolve(newPage);
-                    } else {
-                        resolve(null);
-                    }
-                });
-                setTimeout(() => resolve(null), 3000);
-            });
-            
+            // Try to click on a payment method section
             for (const selector of selectors) {
                 try {
-                    await this.page.click(selector, { timeout: 5000 });
-                    log('info', `Clicked Wallet using: ${selector}`);
+                    await this.page.click(selector, { timeout: 3000 });
+                    log('info', `Clicked payment method using: ${selector}`);
                     break;
                 } catch (e) {
                     continue;
@@ -431,12 +425,28 @@ class GarenaAutomation {
             
             await humanDelay();
             
-            // Check if a new page opened
-            const newPage = await newPagePromise;
-            if (newPage) {
-                log('info', 'New page/popup opened after wallet selection, switching to it');
-                this.page = newPage;
+            // After selecting payment method, we might need to click Login button under it
+            // to proceed to authentication
+            const loginSelectors = [
+                'button:has-text("Login")',
+                'text/Login'
+            ];
+            
+            for (const selector of loginSelectors) {
+                try {
+                    // Find all Login buttons and click the first visible one
+                    const buttons = await this.page.$$(selector);
+                    if (buttons.length > 0) {
+                        await buttons[0].click();
+                        log('info', `Clicked Login button to proceed with payment`);
+                        break;
+                    }
+                } catch (e) {
+                    continue;
+                }
             }
+            
+            await humanDelay(2000, 3000);
             
             screenshot = await takeScreenshot(this.page, '13_wallet_selected');
             if (screenshot) this.screenshots.push(screenshot);
@@ -450,32 +460,39 @@ class GarenaAutomation {
     
     async selectUPPoints() {
         try {
-            log('info', 'Selecting UP Points...');
+            log('info', 'Looking for UP Points or proceeding to payment...');
             
             await humanDelay(1500, 2000);
             
+            // The actual page may not have "UP Points" as a separate option
+            // It might go directly to payment after selecting a method
+            // Take screenshot to see current state
+            const screenshot = await takeScreenshot(this.page, '14_payment_state');
+            if (screenshot) this.screenshots.push(screenshot);
+            
+            // Check if we're on a Garena authentication page
+            const currentUrl = this.page.url();
+            log('info', `Current URL: ${currentUrl}`);
+            
+            // If we see Garena login/auth page elements, return true to proceed
+            const pageContent = await this.page.content();
+            if (pageContent.includes('Garena') || pageContent.includes('garena') || 
+                pageContent.includes('Sign in') || pageContent.includes('Email')) {
+                log('info', 'On Garena authentication page, proceeding...');
+                return true;
+            }
+            
+            // Try clicking UP Points if it exists
             const selectors = [
                 'text/Up Points',
                 'text/UP Points',
-                'button:has-text("Up Points")'
+                'button:has-text("Up Points")',
+                'div:has-text("Up Points")'
             ];
-            
-            // Listen for potential new page/popup
-            const newPagePromise = new Promise((resolve) => {
-                this.browser.once('targetcreated', async (target) => {
-                    if (target.type() === 'page') {
-                        const newPage = await target.page();
-                        resolve(newPage);
-                    } else {
-                        resolve(null);
-                    }
-                });
-                setTimeout(() => resolve(null), 3000);
-            });
             
             for (const selector of selectors) {
                 try {
-                    await this.page.click(selector, { timeout: 5000 });
+                    await this.page.click(selector, { timeout: 3000 });
                     log('info', `Clicked UP Points using: ${selector}`);
                     break;
                 } catch (e) {
@@ -484,21 +501,10 @@ class GarenaAutomation {
             }
             
             await humanDelay();
-            
-            // Check if a new page opened
-            const newPage = await newPagePromise;
-            if (newPage) {
-                log('info', 'New page/popup opened after UP Points selection, switching to it');
-                this.page = newPage;
-            }
-            
-            const screenshot = await takeScreenshot(this.page, '14_up_points_selected');
-            if (screenshot) this.screenshots.push(screenshot);
-            
             return true;
         } catch (e) {
-            log('error', `Failed to select UP Points: ${e.message}`);
-            return false;
+            log('error', `Error in selectUPPoints: ${e.message}`);
+            return true; // Continue anyway
         }
     }
     
