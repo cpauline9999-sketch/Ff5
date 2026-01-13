@@ -112,36 +112,7 @@ class GarenaAutomation {
         }
     }
     
-    async getCurrentPage() {
-        try {
-            // Get all pages and return the active one
-            const pages = await this.browser.pages();
-            if (pages.length === 0) {
-                log('error', 'No pages available in browser');
-                return this.page;
-            }
-            
-            // Find the most recently created page that's not closed
-            for (let i = pages.length - 1; i >= 0; i--) {
-                if (!pages[i].isClosed()) {
-                    return pages[i];
-                }
-            }
-            
-            return pages[0];
-        } catch (e) {
-            log('error', `Error getting current page: ${e.message}`);
-            return this.page;
-        }
-    }
-    
-    async updateToCurrentPage() {
-        const newPage = await this.getCurrentPage();
-        if (newPage && newPage !== this.page) {
-            log('info', 'Switched to new page');
-            this.page = newPage;
-        }
-    }
+    async connectBrowser() {
         try {
             log('info', 'Connecting to BrowserCloud.io...');
             
