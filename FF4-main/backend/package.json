@@ -1,0 +1,10 @@
+{
+  "name": "garena-automation",
+  "version": "1.0.0",
+  "description": "Garena Free Fire Top-Up Automation with Puppeteer",
+  "main": "garena_puppeteer.js",
+  "dependencies": {
+    "puppeteer-core": "^21.0.0",
+    "axios": "^1.6.0"
+  }
+}
