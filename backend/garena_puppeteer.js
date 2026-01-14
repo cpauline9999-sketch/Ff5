@@ -390,97 +390,124 @@ class GarenaAutomation {
     
     async solveCaptchaIfPresent() {
         try {
-            // Check if CAPTCHA exists
+            // Check if CAPTCHA/slider verification exists
             const captchaCheck = await this.page.evaluate(() => {
-                const captchaDiv = document.querySelector('div[class*="captcha"]');
-                if (!captchaDiv) return { exists: false };
+                // Look for the slider verification text
+                const pageText = document.body.textContent || '';
+                const hasSliderText = pageText.includes('Slide right') || 
+                                      pageText.includes('slide to verify') ||
+                                      pageText.includes('Drag to verify') ||
+                                      pageText.includes('secure your access');
                 
-                // Check if it's visible
-                const isVisible = captchaDiv.offsetParent !== null;
-                if (!isVisible) return { exists: false };
+                // Look for captcha div
+                const captchaDiv = document.querySelector('div[class*="captcha"], div[class*="slider"], div[class*="verify"]');
                 
-                // Find the slider handle
-                const sliderHandle = captchaDiv.querySelector('div[draggable], [class*="slider"] button, [class*="drag"]');
+                if (hasSliderText || captchaDiv) {
+                    // Find the slider handle
+                    const sliderHandle = document.querySelector(
+                        'div[class*="slider"] div[draggable], ' +
+                        'div[class*="slider"] button, ' +
+                        'div[class*="drag"], ' +
+                        '[class*="slider-btn"], ' +
+                        '[class*="slide-btn"]'
+                    );
+                    
+                    // Find the slider track
+                    const sliderTrack = document.querySelector(
+                        'div[class*="slider"], ' +
+                        '[class*="slide-track"], ' +
+                        '[class*="slider-track"]'
+                    );
+                    
+                    return { 
+                        exists: true, 
+                        hasSlider: !!sliderHandle,
+                        hasTrack: !!sliderTrack,
+                        handleRect: sliderHandle ? sliderHandle.getBoundingClientRect() : null,
+                        trackRect: sliderTrack ? sliderTrack.getBoundingClientRect() : null
+                    };
+                }
                 
-                return { 
-                    exists: true, 
-                    hasSlider: !!sliderHandle,
-                    captchaRect: captchaDiv.getBoundingClientRect()
-                };
+                return { exists: false };
             });
             
             if (!captchaCheck.exists) {
-                log('info', 'No CAPTCHA detected');
+                log('info', 'No CAPTCHA/slider verification detected');
                 return 'none';
             }
             
-            log('info', 'CAPTCHA detected! Attempting to solve...');
+            log('info', 'Slider verification detected! Attempting to solve...');
             
-            const screenshot = await takeScreenshot(this.page, '05a_captcha_detected');
+            const screenshot = await takeScreenshot(this.page, '07a_slider_detected');
             if (screenshot) this.screenshots.push(screenshot);
             
-            if (captchaCheck.hasSlider) {
-                // Solve slider CAPTCHA
-                log('info', 'Solving slider CAPTCHA...');
+            // Try to solve the slider
+            if (captchaCheck.handleRect) {
+                const handleRect = captchaCheck.handleRect;
                 
-                // Find the slider element and drag it
-                const sliderHandle = await this.page.$('div[class*="captcha"] div[draggable], div[class*="slider"] button, [class*="drag"]');
+                // Start position (center of handle)
+                const startX = handleRect.x + handleRect.width / 2;
+                const startY = handleRect.y + handleRect.height / 2;
                 
-                if (sliderHandle) {
-                    const box = await sliderHandle.boundingBox();
-                    if (box) {
-                        // Start position (center of handle)
-                        const startX = box.x + box.width / 2;
-                        const startY = box.y + box.height / 2;
-                        
-                        // Move to start position
-                        await this.page.mouse.move(startX, startY);
-                        await humanDelay(100, 200);
-                        
-                        // Press mouse down
-                        await this.page.mouse.down();
-                        await humanDelay(50, 100);
-                        
-                        // Drag slowly to the right (300-400px)
-                        const dragDistance = 300;
-                        const steps = 20;
-                        for (let i = 1; i <= steps; i++) {
-                            await this.page.mouse.move(
-                                startX + (dragDistance * i / steps),
-                                startY + (Math.random() * 4 - 2) // Small vertical jitter for human-like movement
-                            );
-                            await humanDelay(20, 40);
-                        }
-                        
-                        // Release mouse
-                        await this.page.mouse.up();
-                        
-                        log('info', 'Slider dragged');
-                        await humanDelay(1000, 2000);
-                        
-                        // Check if CAPTCHA is solved (container should disappear)
-                        const captchaStillExists = await this.page.evaluate(() => {
-                            const captchaDiv = document.querySelector('div[class*="captcha"]');
-                            return captchaDiv && captchaDiv.offsetParent !== null;
-                        });
-                        
-                        if (!captchaStillExists) {
-                            log('info', 'CAPTCHA solved successfully!');
-                            return 'solved';
-                        } else {
-                            log('warning', 'CAPTCHA still present after slider drag');
-                            return 'unsolved';
-                        }
-                    }
+                log('info', `Dragging slider from (${startX.toFixed(0)}, ${startY.toFixed(0)})...`);
+                
+                // Move to start position
+                await this.page.mouse.move(startX, startY);
+                await humanDelay(100, 200);
+                
+                // Press mouse down
+                await this.page.mouse.down();
+                await humanDelay(50, 100);
+                
+                // Drag slowly to the right (300-400px with human-like movement)
+                const dragDistance = 350;
+                const steps = 25;
+                for (let i = 1; i <= steps; i++) {
+                    const progress = i / steps;
+                    // Add slight curve and variation for human-like movement
+                    const xOffset = dragDistance * progress;
+                    const yOffset = Math.sin(progress * Math.PI) * 3; // Slight arc
+                    
+                    await this.page.mouse.move(
+                        startX + xOffset,
+                        startY + yOffset
+                    );
+                    await humanDelay(15, 35);
                 }
+                
+                // Small pause at the end
+                await humanDelay(50, 100);
+                
+                // Release mouse
+                await this.page.mouse.up();
+                
+                log('info', 'Slider dragged');
+                await humanDelay(1500, 2500);
+                
+                // Take screenshot after drag
+                const afterScreenshot = await takeScreenshot(this.page, '07a_after_slider_drag');
+                if (afterScreenshot) this.screenshots.push(afterScreenshot);
+                
+                // Check if CAPTCHA is solved (slider text should disappear)
+                const captchaStillExists = await this.page.evaluate(() => {
+                    const pageText = document.body.textContent || '';
+                    return pageText.includes('Slide right') || pageText.includes('secure your access');
+                });
+                
+                if (!captchaStillExists) {
+                    log('info', 'Slider verification solved successfully!');
+                    return 'solved';
+                } else {
+                    log('warning', 'Slider still present after drag - may need retry');
+                    return 'unsolved';
+                }
+            } else {
+                log('warning', 'Could not find slider handle');
+                return 'unsolved';
             }
             
-            // If we can't solve it automatically
-            log('warning', 'Could not solve CAPTCHA automatically');
-            return 'unsolved';
-            
         } catch (e) {
-            log('error', `Error checking/solving CAPTCHA: ${e.message}`);
+            log('error', `Error checking/solving slider: ${e.message}`);
             return 'error';
         }
     }
