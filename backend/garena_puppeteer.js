@@ -406,6 +406,7 @@ class GarenaAutomation {
             
             // Check main page first
             let captchaCheck = await this.checkCaptchaInFrame(this.page);
+            let captchaFrame = this.page;
             
             // If not found in main page, check iframes
             if (!captchaCheck.exists && frames.length > 1) {
@@ -416,37 +417,13 @@ class GarenaAutomation {
                         if (frameCheck.exists) {
                             log('info', `CAPTCHA found in iframe ${i}`);
                             captchaCheck = frameCheck;
-                            captchaCheck.frameIndex = i;
+                            captchaFrame = frame;
                             break;
                         }
                     } catch (e) {
                         log('warning', `Error checking iframe ${i}: ${e.message}`);
                     }
                 }
-            }
-            
-            // Also try to detect by taking a screenshot and checking visually
-            // The CAPTCHA slider has a specific visual pattern
-            if (!captchaCheck.exists) {
-                // Try to find by visible UI elements using simpler detection
-                captchaCheck = await this.page.evaluate(() => {
-                    // Look for any overlay/modal
-                    const overlays = document.querySelectorAll('div[style*="position: fixed"], div[style*="z-index"]');
-                    for (const overlay of overlays) {
-                        const style = window.getComputedStyle(overlay);
-                        // Check if it's visible and covering part of the screen
-                        if (style.display !== 'none' && style.visibility !== 'hidden') {
-                            const rect = overlay.getBoundingClientRect();
-                            if (rect.width > 200 && rect.height > 50) {
-                                const text = overlay.innerText || '';
-                                if (text.includes('Slide') || text.includes('slide') || text.includes('access')) {
-                                    return { exists: true, reason: 'overlay detected', rect: rect };
-                                }
-                            }
-                        }
-                    }
-                    return { exists: false };
-                });
             }
             
             log('info', `CAPTCHA check result: exists=${captchaCheck.exists}, hasText=${captchaCheck.hasSliderText}, hasDiv=${captchaCheck.hasCaptchaDiv}, hasHandle=${captchaCheck.hasSliderHandle}`);
@@ -461,37 +438,74 @@ class GarenaAutomation {
             screenshot = await takeScreenshot(this.page, '07a_slider_detected');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Get the frame to use for solving
-            let frameToUse = this.page;
-            if (captchaCheck.frameIndex !== undefined) {
-                frameToUse = frames[captchaCheck.frameIndex];
-            }
-            
-            // Try to find and drag the slider
+            // Try to find the slider handle in the correct frame
             let handleRect = captchaCheck.handleRect;
             
-            if (!handleRect) {
-                // Try finding the slider by looking for a small draggable element
-                handleRect = await frameToUse.evaluate(() => {
-                    // Find elements that could be slider handles
-                    const candidates = document.querySelectorAll('span, div, button');
-                    for (const el of candidates) {
-                        const rect = el.getBoundingClientRect();
-                        // Slider handles are usually small square-ish elements
-                        if (rect.width >= 20 && rect.width <= 60 && rect.height >= 20 && rect.height <= 60) {
-                            const style = window.getComputedStyle(el);
-                            // Often have cursor pointer or specific background
-                            if (style.cursor === 'pointer' || style.cursor === 'move' || 
-                                style.background !== 'none' || el.draggable) {
-                                return rect;
+            // If no handle rect, try to find it
+            if (!handleRect || handleRect.width === 0) {
+                log('info', 'Looking for slider handle in frame...');
+                
+                // Get the iframe element to find its position on the main page
+                let frameOffset = { x: 0, y: 0 };
+                
+                if (captchaFrame !== this.page) {
+                    // Get the iframe element's position
+                    const iframeElement = await captchaFrame.frameElement();
+                    if (iframeElement) {
+                        const iframeBox = await iframeElement.boundingBox();
+                        if (iframeBox) {
+                            frameOffset = { x: iframeBox.x, y: iframeBox.y };
+                            log('info', `Iframe offset: (${frameOffset.x}, ${frameOffset.y})`);
+                        }
+                    }
+                }
+                
+                // Find handle in the frame
+                handleRect = await captchaFrame.evaluate(() => {
+                    const handleSelectors = [
+                        'span[class*="nc_"]',
+                        '[class*="nc_iconfont"]',
+                        'span[class*="slider"]',
+                        'div[class*="slider"] span',
+                        'button[class*="slider"]',
+                        '[draggable="true"]'
+                    ];
+                    
+                    for (const sel of handleSelectors) {
+                        const handle = document.querySelector(sel);
+                        if (handle) {
+                            const rect = handle.getBoundingClientRect();
+                            if (rect.width > 5 && rect.height > 5) {
+                                return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
                             }
                         }
                     }
+                    
+                    // Fallback: find any small element that looks like a handle
+                    const allElements = document.querySelectorAll('span, button, div');
+                    for (const el of allElements) {
+                        const rect = el.getBoundingClientRect();
+                        // Handles are typically 30-50px square
+                        if (rect.width >= 20 && rect.width <= 60 && rect.height >= 20 && rect.height <= 60) {
+                            const style = window.getComputedStyle(el);
+                            if (style.cursor === 'pointer' || style.cursor === 'move' || 
+                                el.className.includes('btn') || el.className.includes('handle')) {
+                                return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                            }
+                        }
+                    }
+                    
                     return null;
                 });
+                
+                // Adjust for iframe offset
+                if (handleRect && frameOffset.x !== 0) {
+                    handleRect.x += frameOffset.x;
+                    handleRect.y += frameOffset.y;
+                }
             }
             
-            if (handleRect) {
+            if (handleRect && handleRect.x !== undefined && !isNaN(handleRect.x)) {
                 const startX = handleRect.x + handleRect.width / 2;
                 const startY = handleRect.y + handleRect.height / 2;
                 
@@ -523,7 +537,7 @@ class GarenaAutomation {
                 if (screenshot) this.screenshots.push(screenshot);
                 
                 // Check if solved
-                const stillExists = await this.page.evaluate(() => {
+                const stillExists = await captchaFrame.evaluate(() => {
                     const pageText = document.body.innerText || '';
                     return pageText.includes('Slide right') || pageText.includes('secure your access');
                 });
@@ -532,11 +546,47 @@ class GarenaAutomation {
                     log('info', 'Slider verification solved!');
                     return 'solved';
                 } else {
-                    log('warning', 'Slider may not be solved');
+                    log('warning', 'Slider may not be solved - checking main page');
+                    // Also check main page
+                    const mainStill = await this.page.evaluate(() => {
+                        const text = document.body.innerText || '';
+                        return text.includes('Slide right') || text.includes('secure your access');
+                    });
+                    if (!mainStill) {
+                        log('info', 'Slider verification solved (main page check)!');
+                        return 'solved';
+                    }
                     return 'unsolved';
                 }
             } else {
-                log('warning', 'Could not find slider handle');
+                log('warning', 'Could not find slider handle with valid coordinates');
+                
+                // Last resort: try to click and drag from a guessed position
+                // Based on typical slider CAPTCHA layout, handle is usually at the left
+                log('info', 'Trying fallback slider position...');
+                
+                // Get viewport center as a starting point
+                const viewport = this.page.viewport();
+                const centerX = (viewport?.width || 1920) / 2 - 150; // Slider starts left of center
+                const centerY = (viewport?.height || 1080) / 2;
+                
+                await this.page.mouse.move(centerX, centerY);
+                await humanDelay(100, 200);
+                await this.page.mouse.down();
+                await humanDelay(50, 100);
+                
+                for (let i = 1; i <= 25; i++) {
+                    await this.page.mouse.move(centerX + i * 14, centerY);
+                    await humanDelay(15, 35);
+                }
+                
+                await this.page.mouse.up();
+                log('info', 'Fallback slider drag attempted');
+                await humanDelay(2000, 3000);
+                
+                screenshot = await takeScreenshot(this.page, '07b_fallback_drag');
+                if (screenshot) this.screenshots.push(screenshot);
+                
                 return 'unsolved';
             }
             
