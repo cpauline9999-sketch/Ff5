@@ -224,14 +224,50 @@ class GarenaAutomation {
     
     async connectBrowser() {
         try {
+            let proxyInfo = null;
+            let browserWSEndpoint = CONFIG.BROWSERLESS_URL;
+            
+            // Use residential proxy if enabled
+            if (CONFIG.USE_RESIDENTIAL_PROXY) {
+                log('info', 'Residential proxy enabled, fetching proxies...');
+                const proxies = await fetchWebshareProxies();
+                
+                if (proxies.length > 0) {
+                    proxyInfo = await selectUniqueProxy(proxies);
+                    
+                    if (proxyInfo) {
+                        // Add proxy to browserless URL
+                        const proxyServer = `${proxyInfo.proxy_address}:${proxyInfo.port}`;
+                        browserWSEndpoint = `${CONFIG.BROWSERLESS_URL}&--proxy-server=http://${proxyServer}`;
+                        
+                        log('info', `Selected residential proxy: ${proxyServer} (${proxyInfo.country_code})`);
+                        this.proxyInfo = proxyInfo;
+                    } else {
+                        log('warning', 'No proxy available, connecting without proxy');
+                    }
+                } else {
+                    log('warning', 'No proxies fetched, connecting without proxy');
+                }
+            }
+            
             log('info', 'Connecting to Browserless (joycegames.vip)...');
             
             this.browser = await puppeteer.connect({
-                browserWSEndpoint: CONFIG.BROWSERLESS_URL,
+                browserWSEndpoint: browserWSEndpoint,
                 defaultViewport: { width: 1920, height: 1080 }
             });
             
             this.page = await this.browser.newPage();
+            
+            // Authenticate proxy if using residential proxy
+            if (proxyInfo) {
+                await this.page.authenticate({
+                    username: proxyInfo.username,
+                    password: proxyInfo.password
+                });
+                log('info', 'Proxy authentication configured');
+            }
+            
             await this.page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
             
             log('info', 'Browserless connected successfully');
