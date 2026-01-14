@@ -846,37 +846,87 @@ class GarenaAutomation {
             // Attempt 2: Use solvecaptcha.com API with screenshot
             log('info', 'Local detection failed or slider not solved. Trying SolveCaptcha API...');
             
-            // Take screenshot of CAPTCHA area
+            // Take screenshot of CAPTCHA area - try to get just the CAPTCHA element
             let captchaScreenshot = null;
+            let captchaElementBounds = null;
             
-            if (iframeElement) {
+            // First, try to find and screenshot the CAPTCHA container element
+            const captchaContainerSelectors = [
+                '#nc_1_wrapper',
+                'div[class*="nc_wrapper"]',
+                '.nc-container',
+                'div[class*="nc-outer"]',
+                'iframe[src*="captcha"]'
+            ];
+            
+            for (const selector of captchaContainerSelectors) {
                 try {
-                    captchaScreenshot = await iframeElement.screenshot({ encoding: 'base64' });
+                    const captchaEl = await this.page.$(selector);
+                    if (captchaEl) {
+                        const bbox = await captchaEl.boundingBox();
+                        if (bbox && bbox.width > 100 && bbox.height > 30) {
+                            captchaScreenshot = await captchaEl.screenshot({ encoding: 'base64' });
+                            captchaElementBounds = bbox;
+                            log('info', `Got CAPTCHA element screenshot using ${selector}, bounds: (${bbox.x}, ${bbox.y}, ${bbox.width}x${bbox.height})`);
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    log('warning', `Could not screenshot CAPTCHA element ${selector}: ${e.message}`);
+                }
+            }
+            
+            // If element screenshot failed, try iframe
+            if (!captchaScreenshot && iframeElement) {
+                try {
+                    const iframeBbox = await iframeElement.boundingBox();
+                    if (iframeBbox) {
+                        captchaScreenshot = await iframeElement.screenshot({ encoding: 'base64' });
+                        captchaElementBounds = iframeBbox;
+                        log('info', `Got CAPTCHA iframe screenshot, bounds: (${iframeBbox.x}, ${iframeBbox.y}, ${iframeBbox.width}x${iframeBbox.height})`);
+                    }
                 } catch (e) {
                     log('warning', `Could not screenshot iframe: ${e.message}`);
                 }
             }
             
+            // Fallback to viewport screenshot
             if (!captchaScreenshot) {
                 captchaScreenshot = await this.page.screenshot({ encoding: 'base64', fullPage: false });
+                captchaElementBounds = { x: 0, y: 0, width: 1920, height: 1080 };
+                log('info', 'Using full viewport screenshot for CAPTCHA solving');
             }
             
             // Submit to SolveCaptcha API
             const apiCoords = await this.submitToSolveCaptcha(
                 captchaScreenshot,
-                'Click on the center of the slider button/handle that needs to be dragged to the right. The slider is usually a small icon or arrow on the left side of a track.'
+                'Click on the center of the slider button/handle that needs to be dragged to the right. The slider is usually a small icon or arrow on the LEFT side of a horizontal track. Look for an arrow icon pointing right.'
             );
             
             if (apiCoords) {
                 log('info', `SolveCaptcha returned coordinates: x=${apiCoords.x}, y=${apiCoords.y}`);
                 
-                // Adjust for iframe offset
-                const clickX = apiCoords.x + frameOffset.x;
-                const clickY = apiCoords.y + frameOffset.y;
+                // Adjust coordinates to page coordinates based on where the screenshot was taken
+                let clickX = apiCoords.x;
+                let clickY = apiCoords.y;
                 
-                const dragDist = sliderTrack ? sliderTrack.width - 50 : 280;
+                if (captchaElementBounds && captchaElementBounds.x > 0) {
+                    // If we took a cropped screenshot, add the element's offset
+                    clickX = apiCoords.x + captchaElementBounds.x;
+                    clickY = apiCoords.y + captchaElementBounds.y;
+                    log('info', `Adjusted coordinates from element bounds: (${clickX}, ${clickY})`);
+                }
                 
-                log('info', `Using API coordinates with offset: (${clickX}, ${clickY}), drag distance: ${dragDist}`);
+                // Calculate drag distance
+                let dragDist = 280;
+                if (sliderContainer) {
+                    dragDist = (sliderContainer.x + sliderContainer.width - 30) - clickX;
+                } else if (sliderTrack) {
+                    dragDist = sliderTrack.width - 50;
+                }
+                if (dragDist < 100 || dragDist > 500) dragDist = 280;
+                
+                log('info', `Using coordinates: (${clickX}, ${clickY}), drag distance: ${dragDist}`);
                 
                 const apiResult = await this.performSliderDrag(clickX, clickY, dragDist);
                 if (apiResult === 'solved') {
