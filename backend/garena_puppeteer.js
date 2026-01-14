@@ -480,52 +480,105 @@ class GarenaAutomation {
     
     async clickLoginButtonWithMouseEvents() {
         try {
-            // Find the login button
+            // Find the CORRECT login button (the one for Player ID, not UniPin)
+            // The primary selector is button[data-testid="login-btn"]
             const buttonSelectors = [
                 'button[data-testid="login-btn"]',
-                'button[class*="login"]',
-                'button:not([disabled])'
+                'button[class*="login"]'
             ];
             
             let buttonBox = null;
+            let foundSelector = '';
             
+            // First try to find by specific selectors
             for (const selector of buttonSelectors) {
-                const buttons = await this.page.$$(selector);
-                for (const btn of buttons) {
-                    const text = await btn.evaluate(el => el.textContent || '');
-                    if (text.trim().toLowerCase() === 'login') {
+                try {
+                    const btn = await this.page.$(selector);
+                    if (btn) {
                         buttonBox = await btn.boundingBox();
                         if (buttonBox) {
+                            foundSelector = selector;
                             log('info', `Found Login button with selector: ${selector}`);
                             break;
                         }
                     }
+                } catch (e) {
+                    continue;
                 }
-                if (buttonBox) break;
             }
             
+            // If not found, look for Login buttons in the Login section (Section 1)
             if (!buttonBox) {
-                // Fallback: find by evaluating page
                 const buttonInfo = await this.page.evaluate(() => {
-                    const buttons = document.querySelectorAll('button');
-                    for (const btn of buttons) {
+                    // Find all buttons with "Login" text
+                    const allButtons = document.querySelectorAll('button');
+                    const loginButtons = [];
+                    
+                    for (const btn of allButtons) {
                         const text = (btn.textContent || '').trim().toLowerCase();
                         if (text === 'login' && !btn.disabled) {
                             const rect = btn.getBoundingClientRect();
-                            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                            const section = btn.closest('section, div[class*="login"], div[class*="Login"]');
+                            const sectionText = section ? section.textContent.substring(0, 100) : '';
+                            
+                            loginButtons.push({
+                                x: rect.x,
+                                y: rect.y,
+                                width: rect.width,
+                                height: rect.height,
+                                isInLoginSection: sectionText.includes('Player ID') || sectionText.includes('login with your game account'),
+                                isInPaymentSection: sectionText.includes('UniPin') || sectionText.includes('Payment') || sectionText.includes('Top-Up Amount'),
+                                sectionPreview: sectionText.substring(0, 50)
+                            });
                         }
                     }
-                    return null;
+                    
+                    // Prefer button in Login section, not Payment section
+                    for (const btn of loginButtons) {
+                        if (btn.isInLoginSection && !btn.isInPaymentSection) {
+                            return btn;
+                        }
+                    }
+                    
+                    // If no button in Login section, return the first one that's NOT in payment section
+                    for (const btn of loginButtons) {
+                        if (!btn.isInPaymentSection) {
+                            return btn;
+                        }
+                    }
+                    
+                    // Last resort: return first button found
+                    return loginButtons.length > 0 ? loginButtons[0] : null;
                 });
                 
                 if (buttonInfo) {
                     buttonBox = buttonInfo;
-                    log('info', 'Found Login button via page.evaluate');
+                    log('info', `Found Login button via page.evaluate (in section: ${buttonInfo.sectionPreview || 'unknown'})`);
+                    if (buttonInfo.isInPaymentSection) {
+                        log('warning', 'Warning: Button appears to be in Payment section, not Login section');
+                    }
                 }
             }
             
             if (!buttonBox) {
                 log('error', 'Could not find Login button');
+                
+                // Take screenshot to debug
+                const screenshot = await takeScreenshot(this.page, 'debug_no_login_button');
+                if (screenshot) this.screenshots.push(screenshot);
+                
+                // Log all buttons on page for debugging
+                const allButtons = await this.page.evaluate(() => {
+                    const btns = document.querySelectorAll('button');
+                    return Array.from(btns).map(b => ({
+                        text: b.textContent.trim().substring(0, 30),
+                        testId: b.getAttribute('data-testid'),
+                        classes: b.className.substring(0, 50),
+                        rect: b.getBoundingClientRect()
+                    }));
+                });
+                log('info', `All buttons on page: ${JSON.stringify(allButtons.slice(0, 5))}`);
+                
                 return false;
             }
             
