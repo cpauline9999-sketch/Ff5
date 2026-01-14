@@ -247,6 +247,7 @@ class GarenaAutomation {
             const uidSelectors = [
                 'input[placeholder*="player ID" i]',
                 'input[placeholder*="Player ID" i]',
+                'input[name="user_id"]',
                 'input[type="text"]'
             ];
             
@@ -255,6 +256,11 @@ class GarenaAutomation {
                     await this.page.waitForSelector(selector, { timeout: 5000 });
                     await this.page.click(selector);
                     await humanDelay(100, 200);
+                    // Clear any existing value first
+                    await this.page.evaluate((sel) => {
+                        const input = document.querySelector(sel);
+                        if (input) input.value = '';
+                    }, selector);
                     await this.page.type(selector, playerUid, { delay: randomDelay(20, 50) });
                     log('info', `Player ID filled using: ${selector}`);
                     break;
@@ -268,33 +274,89 @@ class GarenaAutomation {
             
             await humanDelay(300, 500);
             
-            // Click Login in modal
-            log('info', 'Clicking Login button in modal...');
-            const modalLoginSelectors = [
-                'button:has-text("Login")',
-                'text/Login'
-            ];
+            // Click Login/Submit button in the form
+            log('info', 'Clicking Login button to submit...');
             
-            for (const selector of modalLoginSelectors) {
-                try {
-                    await this.page.click(selector);
-                    log('info', `Clicked modal Login using: ${selector}`);
-                    break;
-                } catch (e) {
-                    continue;
+            // Try different ways to submit
+            const submitted = await this.page.evaluate(() => {
+                // Find the login button in the form
+                const buttons = document.querySelectorAll('button');
+                for (const btn of buttons) {
+                    const text = (btn.textContent || '').trim().toLowerCase();
+                    if (text === 'login') {
+                        btn.click();
+                        return { clicked: true, method: 'button text' };
+                    }
                 }
-            }
+                
+                // Try submit button
+                const submitBtn = document.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.click();
+                    return { clicked: true, method: 'submit button' };
+                }
+                
+                // Try form submit
+                const form = document.querySelector('form');
+                if (form) {
+                    form.submit();
+                    return { clicked: true, method: 'form submit' };
+                }
+                
+                return { clicked: false };
+            });
+            
+            log('info', `Login submit: ${JSON.stringify(submitted)}`);
             
             await humanDelay(1000, 1500);
             screenshot = await takeScreenshot(this.page, '06_modal_login_clicked');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Wait for login to complete
+            // Wait for login to process and page to update
             log('info', 'Waiting for login to complete...');
-            await humanDelay(2000, 2500);
+            await humanDelay(3000, 5000);
+            
+            // Check if login was successful by looking for username display
+            const loginStatus = await this.page.evaluate(() => {
+                // Look for username element
+                const usernameSelectors = ['.username', '.user-name', '[data-username]', '.player-name'];
+                for (const sel of usernameSelectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.textContent.trim()) {
+                        return { success: true, username: el.textContent.trim() };
+                    }
+                }
+                
+                // Check if login form is still visible (means login failed)
+                const loginForm = document.querySelector('input[placeholder*="player" i]');
+                if (loginForm) {
+                    // Check if the form is in an error state
+                    const errorMsg = document.querySelector('.error, .alert-error, [class*="error"]');
+                    if (errorMsg) {
+                        return { success: false, error: errorMsg.textContent.trim() };
+                    }
+                    return { success: false, error: 'Login form still visible' };
+                }
+                
+                // Check page content for logged-in indicators
+                const pageText = document.body.textContent || '';
+                if (pageText.includes('Welcome') || pageText.includes('Logged in')) {
+                    return { success: true, username: 'unknown' };
+                }
+                
+                return { success: false, error: 'Unable to determine login status' };
+            });
+            
+            log('info', `Login status: ${JSON.stringify(loginStatus)}`);
             
             screenshot = await takeScreenshot(this.page, '07_after_login');
             if (screenshot) this.screenshots.push(screenshot);
+            
+            if (loginStatus.success) {
+                log('info', `Login successful! Username: ${loginStatus.username}`);
+            } else {
+                log('warning', `Login may have failed: ${loginStatus.error}`);
+            }
             
             log('info', 'Login completed');
             return true;
