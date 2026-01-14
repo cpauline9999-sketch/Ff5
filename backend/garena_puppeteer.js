@@ -598,7 +598,7 @@ class GarenaAutomation {
                                     input.dispatchEvent(new Event('input', { bubbles: true }));
                                 }
                             }
-                        }, CONFIG.TEST_PLAYER_UID);
+                        }, this.playerUid);
                         log('info', 'Filled Player ID using page.evaluate');
                     }
                     
