@@ -280,6 +280,26 @@ class GarenaAutomation {
     
     async navigateToShop() {
         try {
+            // First verify our proxy IP is working
+            if (this.proxyInfo) {
+                try {
+                    log('info', 'Verifying proxy IP...');
+                    await this.page.goto('https://api.ipify.org?format=json', { timeout: 15000 });
+                    const ipText = await this.page.evaluate(() => document.body.textContent);
+                    log('info', `Current IP: ${ipText}`);
+                    
+                    // Check if IP matches proxy
+                    const ipMatch = JSON.parse(ipText).ip === this.proxyInfo.proxy_address;
+                    if (!ipMatch) {
+                        log('warning', `IP mismatch! Expected: ${this.proxyInfo.proxy_address}, Got: ${JSON.parse(ipText).ip}`);
+                    } else {
+                        log('info', 'Proxy IP verified successfully');
+                    }
+                } catch (e) {
+                    log('warning', `IP verification failed: ${e.message}`);
+                }
+            }
+            
             log('info', 'Navigating to shop.garena.my...');
             await this.page.goto('https://shop.garena.my/', {
                 waitUntil: 'domcontentloaded',
