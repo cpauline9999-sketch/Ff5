@@ -64,7 +64,8 @@ async function takeScreenshot(page, name, orderId) {
         await fs.mkdir(CONFIG.SCREENSHOT_DIR, { recursive: true });
         const filename = `${name}_${Date.now()}.png`;
         const filepath = path.join(CONFIG.SCREENSHOT_DIR, filename);
-        await page.screenshot({ path: filepath, fullPage: true });
+        // Use fullPage: false to match viewport coordinates used in mouse operations
+        await page.screenshot({ path: filepath, fullPage: false });
         log('info', `Screenshot saved: ${filename}`);
         return filepath;
     } catch (e) {
