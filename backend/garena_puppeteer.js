@@ -2,18 +2,25 @@
  * Garena Free Fire Top-Up Automation
  * Using Puppeteer + BrowserCloud.io (15 min sessions)
  * With SolveCaptcha CAPTCHA solving support
+ * With Webshare.io Residential Proxy Support
  */
 
 const puppeteer = require('puppeteer-core');
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
+const proxyChain = require('proxy-chain');
 
 // ===== CONFIGURATION =====
 const CONFIG = {
     // Browserless Configuration (joycegames.vip)
     BROWSERLESS_TOKEN: 'browserlessTOKEN2026',
     BROWSERLESS_URL: 'wss://browserless.joycegames.vip?token=browserlessTOKEN2026',
+    
+    // Webshare.io Residential Proxy Configuration
+    WEBSHARE_API_KEY: 'lmjv9mbjyl1uxinypg6gmkf7lvpt2mnbxbx0bmsd',
+    WEBSHARE_API_URL: 'https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=100',
+    USE_RESIDENTIAL_PROXY: true,  // Enable residential proxy
     
     // SolveCaptcha Configuration
     SOLVECAPTCHA_API_KEY: 'a19f74499d6680dcd821a74c9a5d079e',
@@ -37,8 +44,110 @@ const CONFIG = {
     DELAY_MAX: 500,
     
     // Screenshot directory
-    SCREENSHOT_DIR: '/tmp/garena_screenshots'
+    SCREENSHOT_DIR: '/tmp/garena_screenshots',
+    
+    // Proxy usage tracking file
+    PROXY_USAGE_FILE: '/tmp/webshare_proxy_usage.json'
 };
+
+// ===== PROXY MANAGEMENT =====
+/**
+ * Fetch available proxies from Webshare.io
+ */
+async function fetchWebshareProxies() {
+    try {
+        log('info', 'Fetching residential proxies from Webshare.io...');
+        const response = await axios.get(CONFIG.WEBSHARE_API_URL, {
+            headers: {
+                'Authorization': `Token ${CONFIG.WEBSHARE_API_KEY}`
+            }
+        });
+        
+        const proxies = response.data.results || [];
+        log('info', `Fetched ${proxies.length} residential proxies`);
+        return proxies;
+    } catch (e) {
+        log('error', `Failed to fetch Webshare proxies: ${e.message}`);
+        return [];
+    }
+}
+
+/**
+ * Get proxy usage history to avoid reusing recently used proxies
+ */
+async function getProxyUsageHistory() {
+    try {
+        const data = await fs.readFile(CONFIG.PROXY_USAGE_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (e) {
+        return { usedProxies: [], lastUsedIndex: -1 };
+    }
+}
+
+/**
+ * Save proxy usage history
+ */
+async function saveProxyUsageHistory(history) {
+    try {
+        await fs.writeFile(CONFIG.PROXY_USAGE_FILE, JSON.stringify(history, null, 2));
+    } catch (e) {
+        log('warning', `Failed to save proxy usage history: ${e.message}`);
+    }
+}
+
+/**
+ * Select a unique proxy for this session
+ */
+async function selectUniqueProxy(proxies) {
+    if (!proxies || proxies.length === 0) {
+        return null;
+    }
+    
+    const history = await getProxyUsageHistory();
+    const now = Date.now();
+    
+    // Clean up old entries (older than 1 hour)
+    history.usedProxies = history.usedProxies.filter(
+        entry => now - entry.timestamp < 3600000
+    );
+    
+    const usedIds = new Set(history.usedProxies.map(e => e.id));
+    
+    // Find an unused proxy
+    let selectedProxy = null;
+    for (const proxy of proxies) {
+        if (!usedIds.has(proxy.id)) {
+            selectedProxy = proxy;
+            break;
+        }
+    }
+    
+    // If all proxies used recently, use round-robin from least recently used
+    if (!selectedProxy) {
+        const nextIndex = (history.lastUsedIndex + 1) % proxies.length;
+        selectedProxy = proxies[nextIndex];
+        history.lastUsedIndex = nextIndex;
+        log('info', `All proxies used recently, using round-robin index ${nextIndex}`);
+    }
+    
+    // Record this proxy as used
+    history.usedProxies.push({
+        id: selectedProxy.id,
+        timestamp: now
+    });
+    history.lastUsedIndex = proxies.indexOf(selectedProxy);
+    
+    await saveProxyUsageHistory(history);
+    
+    return selectedProxy;
+}
+
+/**
+ * Create proxy URL for Puppeteer
+ */
+function createProxyUrl(proxy) {
+    return `http://${proxy.username}:${proxy.password}@${proxy.proxy_address}:${proxy.port}`;
+}
 
 // ===== UTILITY FUNCTIONS =====
 function log(level, message, data = null) {
