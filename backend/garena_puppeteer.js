@@ -388,6 +388,139 @@ class GarenaAutomation {
         }
     }
     
+    /**
+     * Submit image to solvecaptcha.com API for solving
+     * @param {string} base64Image - Base64 encoded image
+     * @param {string} instructions - Instructions for solver
+     * @returns {Promise<object|null>} - Solution coordinates or null
+     */
+    async submitToSolveCaptcha(base64Image, instructions = 'Click on the slider button/handle that needs to be dragged') {
+        try {
+            log('info', 'Submitting CAPTCHA to solvecaptcha.com...');
+            
+            // Step 1: Submit the CAPTCHA
+            const submitResponse = await axios.post(`${CONFIG.SOLVECAPTCHA_BASE_URL}/in.php`, {
+                key: CONFIG.SOLVECAPTCHA_API_KEY,
+                method: 'base64',
+                body: base64Image,
+                coordinatescaptcha: 1,
+                textinstructions: instructions,
+                json: 1
+            });
+            
+            log('info', `SolveCaptcha submit response: ${JSON.stringify(submitResponse.data)}`);
+            
+            if (submitResponse.data.status !== 1) {
+                log('error', `SolveCaptcha submit failed: ${submitResponse.data.request}`);
+                return null;
+            }
+            
+            const captchaId = submitResponse.data.request;
+            log('info', `CAPTCHA submitted, ID: ${captchaId}`);
+            
+            // Step 2: Poll for result (max 120 seconds)
+            const maxAttempts = 24;
+            const pollInterval = 5000;
+            
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                await sleep(pollInterval);
+                
+                log('info', `Polling for result, attempt ${attempt}/${maxAttempts}...`);
+                
+                const resultResponse = await axios.get(`${CONFIG.SOLVECAPTCHA_BASE_URL}/res.php`, {
+                    params: {
+                        key: CONFIG.SOLVECAPTCHA_API_KEY,
+                        action: 'get',
+                        id: captchaId,
+                        json: 1
+                    }
+                });
+                
+                log('info', `SolveCaptcha result response: ${JSON.stringify(resultResponse.data)}`);
+                
+                if (resultResponse.data.status === 1) {
+                    // Success! Parse coordinates
+                    const solution = resultResponse.data.request;
+                    log('info', `CAPTCHA solved! Solution: ${solution}`);
+                    
+                    // Parse coordinates from response (format: "x=123,y=456" or "coordinates:x=123,y=456")
+                    const coordMatch = solution.match(/x[=:]?\s*(\d+)[,;]?\s*y[=:]?\s*(\d+)/i);
+                    if (coordMatch) {
+                        return {
+                            x: parseInt(coordMatch[1]),
+                            y: parseInt(coordMatch[2])
+                        };
+                    }
+                    
+                    // Alternative format: just numbers
+                    const numMatch = solution.match(/(\d+)[,\s]+(\d+)/);
+                    if (numMatch) {
+                        return {
+                            x: parseInt(numMatch[1]),
+                            y: parseInt(numMatch[2])
+                        };
+                    }
+                    
+                    log('warning', `Could not parse coordinates from: ${solution}`);
+                    return null;
+                    
+                } else if (resultResponse.data.request === 'CAPCHA_NOT_READY') {
+                    continue;
+                } else {
+                    log('error', `SolveCaptcha error: ${resultResponse.data.request}`);
+                    return null;
+                }
+            }
+            
+            log('error', 'SolveCaptcha timeout - exceeded max polling attempts');
+            return null;
+            
+        } catch (e) {
+            log('error', `SolveCaptcha API error: ${e.message}`);
+            return null;
+        }
+    }
+    
+    /**
+     * Take screenshot of CAPTCHA element and solve using solvecaptcha.com
+     */
+    async solveCaptchaWithAPI(captchaElement, frameOffset = { x: 0, y: 0 }) {
+        try {
+            log('info', 'Taking CAPTCHA screenshot for API solving...');
+            
+            // Take screenshot of the CAPTCHA element or full page
+            let base64Image;
+            
+            if (captchaElement) {
+                const screenshotBuffer = await captchaElement.screenshot({ encoding: 'base64' });
+                base64Image = screenshotBuffer;
+            } else {
+                // Full page screenshot
+                const screenshotBuffer = await this.page.screenshot({ encoding: 'base64', fullPage: false });
+                base64Image = screenshotBuffer;
+            }
+            
+            // Submit to API
+            const coordinates = await this.submitToSolveCaptcha(base64Image);
+            
+            if (coordinates) {
+                log('info', `Got coordinates from API: x=${coordinates.x}, y=${coordinates.y}`);
+                
+                // Adjust for iframe offset if needed
+                let clickX = coordinates.x + frameOffset.x;
+                let clickY = coordinates.y + frameOffset.y;
+                
+                log('info', `Adjusted coordinates: x=${clickX}, y=${clickY}`);
+                return coordinates;
+            }
+            
+            return null;
+        } catch (e) {
+            log('error', `Error in solveCaptchaWithAPI: ${e.message}`);
+            return null;
+        }
+    }
+    
     async solveCaptchaIfPresent() {
         try {
             // Wait a moment for any dynamic content to load
@@ -407,6 +540,7 @@ class GarenaAutomation {
             // Check main page first
             let captchaCheck = await this.checkCaptchaInFrame(this.page);
             let captchaFrame = this.page;
+            let iframeElement = null;
             
             // If not found in main page, check iframes
             if (!captchaCheck.exists && frames.length > 1) {
@@ -418,6 +552,7 @@ class GarenaAutomation {
                             log('info', `CAPTCHA found in iframe ${i}`);
                             captchaCheck = frameCheck;
                             captchaFrame = frame;
+                            iframeElement = await frame.frameElement();
                             break;
                         }
                     } catch (e) {
@@ -433,42 +568,37 @@ class GarenaAutomation {
                 return 'none';
             }
             
-            log('info', 'Slider verification detected! Attempting to solve...');
+            log('info', 'Slider verification detected! Attempting to solve with SolveCaptcha API...');
             
             screenshot = await takeScreenshot(this.page, '07a_slider_detected');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Try to find the slider handle in the correct frame
+            // Get iframe offset if CAPTCHA is in iframe
+            let frameOffset = { x: 0, y: 0 };
+            if (iframeElement) {
+                const iframeBox = await iframeElement.boundingBox();
+                if (iframeBox) {
+                    frameOffset = { x: iframeBox.x, y: iframeBox.y };
+                    log('info', `Iframe offset: (${frameOffset.x}, ${frameOffset.y})`);
+                }
+            }
+            
+            // Try to find slider handle in the frame first
             let handleRect = captchaCheck.handleRect;
             
-            // If no handle rect, try to find it
             if (!handleRect || handleRect.width === 0) {
                 log('info', 'Looking for slider handle in frame...');
                 
-                // Get the iframe element to find its position on the main page
-                let frameOffset = { x: 0, y: 0 };
-                
-                if (captchaFrame !== this.page) {
-                    // Get the iframe element's position
-                    const iframeElement = await captchaFrame.frameElement();
-                    if (iframeElement) {
-                        const iframeBox = await iframeElement.boundingBox();
-                        if (iframeBox) {
-                            frameOffset = { x: iframeBox.x, y: iframeBox.y };
-                            log('info', `Iframe offset: (${frameOffset.x}, ${frameOffset.y})`);
-                        }
-                    }
-                }
-                
-                // Find handle in the frame
                 handleRect = await captchaFrame.evaluate(() => {
                     const handleSelectors = [
+                        'span[class*="nc_iconfont"]',
+                        'span[class*="btn_slide"]',
                         'span[class*="nc_"]',
-                        '[class*="nc_iconfont"]',
-                        'span[class*="slider"]',
                         'div[class*="slider"] span',
                         'button[class*="slider"]',
-                        '[draggable="true"]'
+                        '[class*="slide"] > span',
+                        'div[class*="_btn"]',
+                        'span[data-nc-lang]'
                     ];
                     
                     for (const sel of handleSelectors) {
@@ -476,21 +606,31 @@ class GarenaAutomation {
                         if (handle) {
                             const rect = handle.getBoundingClientRect();
                             if (rect.width > 5 && rect.height > 5) {
-                                return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                                return { 
+                                    x: rect.x, 
+                                    y: rect.y, 
+                                    width: rect.width, 
+                                    height: rect.height,
+                                    selector: sel 
+                                };
                             }
                         }
                     }
                     
-                    // Fallback: find any small element that looks like a handle
+                    // Fallback: look for elements with cursor pointer that are small (handle-like)
                     const allElements = document.querySelectorAll('span, button, div');
                     for (const el of allElements) {
                         const rect = el.getBoundingClientRect();
-                        // Handles are typically 30-50px square
                         if (rect.width >= 20 && rect.width <= 60 && rect.height >= 20 && rect.height <= 60) {
                             const style = window.getComputedStyle(el);
-                            if (style.cursor === 'pointer' || style.cursor === 'move' || 
-                                el.className.includes('btn') || el.className.includes('handle')) {
-                                return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                            if (style.cursor === 'pointer' || style.cursor === 'move') {
+                                return { 
+                                    x: rect.x, 
+                                    y: rect.y, 
+                                    width: rect.width, 
+                                    height: rect.height,
+                                    selector: 'fallback-pointer' 
+                                };
                             }
                         }
                     }
@@ -505,94 +645,258 @@ class GarenaAutomation {
                 }
             }
             
+            // Also try to get the slider track/container to understand drag distance
+            const sliderTrack = await captchaFrame.evaluate(() => {
+                const trackSelectors = [
+                    'div[class*="nc-lang-cnt"]',
+                    'div[class*="scale_text"]',
+                    'div[class*="slider_track"]',
+                    'div[class*="_bg"]',
+                    'div[class*="nc_scale"]'
+                ];
+                
+                for (const sel of trackSelectors) {
+                    const track = document.querySelector(sel);
+                    if (track) {
+                        const rect = track.getBoundingClientRect();
+                        if (rect.width > 100) {
+                            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                        }
+                    }
+                }
+                
+                return null;
+            });
+            
+            if (sliderTrack) {
+                log('info', `Slider track found: x=${sliderTrack.x}, width=${sliderTrack.width}`);
+            }
+            
+            // Attempt 1: Use found handle coordinates
             if (handleRect && handleRect.x !== undefined && !isNaN(handleRect.x)) {
+                log('info', `Found slider handle at: x=${handleRect.x}, y=${handleRect.y}, selector=${handleRect.selector || 'unknown'}`);
+                
                 const startX = handleRect.x + handleRect.width / 2;
                 const startY = handleRect.y + handleRect.height / 2;
                 
-                log('info', `Dragging slider from (${startX.toFixed(0)}, ${startY.toFixed(0)})...`);
-                
-                await this.page.mouse.move(startX, startY);
-                await humanDelay(100, 200);
-                await this.page.mouse.down();
-                await humanDelay(50, 100);
-                
-                const dragDistance = 350;
-                const steps = 25;
-                for (let i = 1; i <= steps; i++) {
-                    const progress = i / steps;
-                    const xOffset = dragDistance * progress;
-                    const yOffset = Math.sin(progress * Math.PI) * 3;
-                    
-                    await this.page.mouse.move(startX + xOffset, startY + yOffset);
-                    await humanDelay(15, 35);
+                // Calculate drag distance (track width minus handle position, or use default)
+                let dragDistance = 280;
+                if (sliderTrack) {
+                    dragDistance = sliderTrack.width - (handleRect.x - sliderTrack.x) - handleRect.width - 10;
+                    if (dragDistance < 100) dragDistance = 280;
                 }
                 
-                await humanDelay(50, 100);
-                await this.page.mouse.up();
+                log('info', `Dragging slider from (${startX.toFixed(0)}, ${startY.toFixed(0)}) by ${dragDistance}px...`);
                 
-                log('info', 'Slider dragged');
-                await humanDelay(2000, 3000);
+                // Perform human-like drag
+                const result = await this.performSliderDrag(startX, startY, dragDistance);
                 
-                screenshot = await takeScreenshot(this.page, '07b_after_slider_drag');
-                if (screenshot) this.screenshots.push(screenshot);
-                
-                // Check if solved
-                const stillExists = await captchaFrame.evaluate(() => {
-                    const pageText = document.body.innerText || '';
-                    return pageText.includes('Slide right') || pageText.includes('secure your access');
-                });
-                
-                if (!stillExists) {
-                    log('info', 'Slider verification solved!');
+                if (result === 'solved') {
                     return 'solved';
-                } else {
-                    log('warning', 'Slider may not be solved - checking main page');
-                    // Also check main page
-                    const mainStill = await this.page.evaluate(() => {
-                        const text = document.body.innerText || '';
-                        return text.includes('Slide right') || text.includes('secure your access');
-                    });
-                    if (!mainStill) {
-                        log('info', 'Slider verification solved (main page check)!');
-                        return 'solved';
-                    }
-                    return 'unsolved';
-                }
-            } else {
-                log('warning', 'Could not find slider handle with valid coordinates');
-                
-                // Last resort: try to click and drag from a guessed position
-                // Based on typical slider CAPTCHA layout, handle is usually at the left
-                log('info', 'Trying fallback slider position...');
-                
-                // Get viewport center as a starting point
-                const viewport = this.page.viewport();
-                const centerX = (viewport?.width || 1920) / 2 - 150; // Slider starts left of center
-                const centerY = (viewport?.height || 1080) / 2;
-                
-                await this.page.mouse.move(centerX, centerY);
-                await humanDelay(100, 200);
-                await this.page.mouse.down();
-                await humanDelay(50, 100);
-                
-                for (let i = 1; i <= 25; i++) {
-                    await this.page.mouse.move(centerX + i * 14, centerY);
-                    await humanDelay(15, 35);
                 }
                 
-                await this.page.mouse.up();
-                log('info', 'Fallback slider drag attempted');
-                await humanDelay(2000, 3000);
+                // If first attempt failed, try again with adjusted distance
+                log('info', 'First drag attempt may have failed, trying with different distance...');
+                await humanDelay(1000, 2000);
                 
-                screenshot = await takeScreenshot(this.page, '07b_fallback_drag');
-                if (screenshot) this.screenshots.push(screenshot);
-                
-                return 'unsolved';
+                const result2 = await this.performSliderDrag(startX, startY, dragDistance * 0.85);
+                if (result2 === 'solved') {
+                    return 'solved';
+                }
             }
+            
+            // Attempt 2: Use solvecaptcha.com API with screenshot
+            log('info', 'Local detection failed or slider not solved. Trying SolveCaptcha API...');
+            
+            // Take screenshot of CAPTCHA area
+            let captchaScreenshot = null;
+            
+            if (iframeElement) {
+                try {
+                    captchaScreenshot = await iframeElement.screenshot({ encoding: 'base64' });
+                } catch (e) {
+                    log('warning', `Could not screenshot iframe: ${e.message}`);
+                }
+            }
+            
+            if (!captchaScreenshot) {
+                captchaScreenshot = await this.page.screenshot({ encoding: 'base64', fullPage: false });
+            }
+            
+            // Submit to SolveCaptcha API
+            const apiCoords = await this.submitToSolveCaptcha(
+                captchaScreenshot,
+                'Click on the center of the slider button/handle that needs to be dragged to the right. The slider is usually a small icon or arrow on the left side of a track.'
+            );
+            
+            if (apiCoords) {
+                log('info', `SolveCaptcha returned coordinates: x=${apiCoords.x}, y=${apiCoords.y}`);
+                
+                // Adjust for iframe offset
+                const clickX = apiCoords.x + frameOffset.x;
+                const clickY = apiCoords.y + frameOffset.y;
+                
+                const dragDist = sliderTrack ? sliderTrack.width - 50 : 280;
+                
+                log('info', `Using API coordinates with offset: (${clickX}, ${clickY}), drag distance: ${dragDist}`);
+                
+                const apiResult = await this.performSliderDrag(clickX, clickY, dragDist);
+                if (apiResult === 'solved') {
+                    return 'solved';
+                }
+            }
+            
+            // Attempt 3: Fallback to center-screen guess
+            log('info', 'All methods failed. Trying fallback center-screen position...');
+            
+            const viewport = this.page.viewport();
+            const fallbackX = (viewport?.width || 1920) / 2 - 150;
+            const fallbackY = (viewport?.height || 1080) / 2;
+            
+            const fallbackResult = await this.performSliderDrag(fallbackX, fallbackY, 300);
+            
+            screenshot = await takeScreenshot(this.page, '07b_after_all_attempts');
+            if (screenshot) this.screenshots.push(screenshot);
+            
+            return fallbackResult === 'solved' ? 'solved' : 'unsolved';
             
         } catch (e) {
             log('error', `Error in CAPTCHA check: ${e.message}`);
             return 'error';
+        }
+    }
+    
+    /**
+     * Perform human-like slider drag
+     */
+    async performSliderDrag(startX, startY, dragDistance) {
+        try {
+            log('info', `Performing slider drag from (${startX.toFixed(0)}, ${startY.toFixed(0)}) distance=${dragDistance}...`);
+            
+            // Move to start position
+            await this.page.mouse.move(startX, startY);
+            await humanDelay(100, 200);
+            
+            // Mouse down
+            await this.page.mouse.down();
+            await humanDelay(50, 100);
+            
+            // Human-like drag with acceleration/deceleration and slight vertical wobble
+            const steps = 30;
+            for (let i = 1; i <= steps; i++) {
+                const progress = i / steps;
+                
+                // Ease-out curve for more natural movement
+                const easeProgress = 1 - Math.pow(1 - progress, 3);
+                const xOffset = dragDistance * easeProgress;
+                
+                // Slight vertical wobble for human-like movement
+                const yOffset = Math.sin(progress * Math.PI * 2) * 2;
+                
+                await this.page.mouse.move(startX + xOffset, startY + yOffset);
+                
+                // Variable delay for human-like speed
+                const delay = progress < 0.3 ? randomDelay(10, 25) : randomDelay(5, 15);
+                await sleep(delay);
+            }
+            
+            // Small pause before release
+            await humanDelay(50, 150);
+            
+            // Mouse up
+            await this.page.mouse.up();
+            
+            log('info', 'Slider drag completed');
+            await humanDelay(2000, 3000);
+            
+            // Take screenshot after drag
+            const screenshot = await takeScreenshot(this.page, '07b_after_slider_drag');
+            if (screenshot) this.screenshots.push(screenshot);
+            
+            // Check if CAPTCHA is solved
+            const isSolved = await this.checkIfCaptchaSolved();
+            
+            if (isSolved) {
+                log('info', 'Slider verification solved!');
+                return 'solved';
+            } else {
+                log('warning', 'Slider drag completed but CAPTCHA may not be solved');
+                return 'unsolved';
+            }
+            
+        } catch (e) {
+            log('error', `Error in performSliderDrag: ${e.message}`);
+            return 'error';
+        }
+    }
+    
+    /**
+     * Check if CAPTCHA has been solved
+     */
+    async checkIfCaptchaSolved() {
+        try {
+            // Check main page
+            const mainPageCheck = await this.page.evaluate(() => {
+                const text = document.body.innerText || document.body.textContent || '';
+                
+                // Check for slider CAPTCHA text (if present, not solved)
+                const hasCaptchaText = text.includes('Slide right') || 
+                                       text.includes('slide to verify') ||
+                                       text.includes('secure your access') ||
+                                       text.includes('验证');
+                
+                // Check for success indicators
+                const hasSuccess = text.includes('Verification passed') ||
+                                  text.includes('Success') ||
+                                  text.includes('验证通过');
+                
+                // Check if CAPTCHA elements are still visible
+                const captchaElement = document.querySelector('div[class*="nc_wrapper"], div[class*="slider_verify"]');
+                const isVisible = captchaElement && 
+                    captchaElement.offsetParent !== null &&
+                    window.getComputedStyle(captchaElement).display !== 'none';
+                
+                return {
+                    hasCaptchaText,
+                    hasSuccess,
+                    captchaVisible: isVisible
+                };
+            });
+            
+            log('info', `CAPTCHA solved check: hasCaptchaText=${mainPageCheck.hasCaptchaText}, hasSuccess=${mainPageCheck.hasSuccess}, captchaVisible=${mainPageCheck.captchaVisible}`);
+            
+            // CAPTCHA is solved if success message appears OR if captcha text is gone
+            if (mainPageCheck.hasSuccess) {
+                return true;
+            }
+            
+            if (!mainPageCheck.hasCaptchaText && !mainPageCheck.captchaVisible) {
+                return true;
+            }
+            
+            // Also check all iframes
+            const frames = this.page.frames();
+            for (const frame of frames) {
+                try {
+                    const frameCheck = await frame.evaluate(() => {
+                        const text = document.body.innerText || '';
+                        return !text.includes('Slide right') && !text.includes('secure your access');
+                    });
+                    
+                    if (frameCheck) {
+                        // Frame doesn't have CAPTCHA text anymore
+                        continue;
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+            
+            return false;
+            
+        } catch (e) {
+            log('error', `Error checking if CAPTCHA solved: ${e.message}`);
+            return false;
         }
     }
     
