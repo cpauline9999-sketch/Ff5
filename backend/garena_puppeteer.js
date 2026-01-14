@@ -935,19 +935,53 @@ class GarenaAutomation {
                 }
             }
             
-            // Attempt 3: Fallback to center-screen guess
-            log('info', 'All methods failed. Trying fallback center-screen position...');
+            // Attempt 3: Smart fallback positions based on typical slider locations
+            // The Garena slider typically appears in a modal centered on screen
+            // Based on analysis, handle is around X=450-550, Y=490-520
+            log('info', 'API method failed. Trying smart fallback positions...');
             
             const viewport = this.page.viewport();
-            const fallbackX = (viewport?.width || 1920) / 2 - 150;
-            const fallbackY = (viewport?.height || 1080) / 2;
+            const viewportWidth = viewport?.width || 1920;
+            const viewportHeight = viewport?.height || 1080;
             
-            const fallbackResult = await this.performSliderDrag(fallbackX, fallbackY, 300);
+            // Position 1: Estimated slider handle position (left side of center modal)
+            const smartX1 = 453;  // Based on image analysis
+            const smartY1 = 500;
+            
+            log('info', `Trying smart position 1: (${smartX1}, ${smartY1})`);
+            let smartResult = await this.performSliderDrag(smartX1, smartY1, 280);
+            if (smartResult === 'solved') {
+                return 'solved';
+            }
+            
+            await humanDelay(1000, 1500);
+            
+            // Position 2: Slightly adjusted (modal might shift)
+            const smartX2 = 520;
+            const smartY2 = 505;
+            
+            log('info', `Trying smart position 2: (${smartX2}, ${smartY2})`);
+            smartResult = await this.performSliderDrag(smartX2, smartY2, 280);
+            if (smartResult === 'solved') {
+                return 'solved';
+            }
+            
+            await humanDelay(1000, 1500);
+            
+            // Position 3: Alternative position (different modal placement)
+            const smartX3 = 480;
+            const smartY3 = 495;
+            
+            log('info', `Trying smart position 3: (${smartX3}, ${smartY3})`);
+            smartResult = await this.performSliderDrag(smartX3, smartY3, 300);
+            if (smartResult === 'solved') {
+                return 'solved';
+            }
             
             screenshot = await takeScreenshot(this.page, '07b_after_all_attempts');
             if (screenshot) this.screenshots.push(screenshot);
             
-            return fallbackResult === 'solved' ? 'solved' : 'unsolved';
+            return 'unsolved';
             
         } catch (e) {
             log('error', `Error in CAPTCHA check: ${e.message}`);
