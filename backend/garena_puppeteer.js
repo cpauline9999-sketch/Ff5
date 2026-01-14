@@ -242,56 +242,57 @@ class GarenaAutomation {
             log('info', 'Waiting for login modal...');
             await humanDelay(500, 1000);
             
-            // Fill Player ID with PROPER EVENT SEQUENCE
+            // Fill Player ID with PROPER EVENT SEQUENCE (React/Vue compatible)
             log('info', `Filling Player ID: ${playerUid} with proper JS events...`);
             
-            const fillResult = await this.page.evaluate((uid) => {
-                // Find the Player ID input
-                const inputSelectors = [
-                    'input[name="user_id"]',
-                    'input[id*="user"]',
-                    'input[placeholder*="Player" i]',
-                    'input[placeholder*="player" i]'
-                ];
-                
-                let input = null;
-                for (const selector of inputSelectors) {
-                    input = document.querySelector(selector);
-                    if (input) break;
+            // First, find and focus the input
+            const inputSelector = 'input[name="user_id"], input[placeholder*="Player" i], input[placeholder*="player" i]';
+            
+            try {
+                await this.page.waitForSelector(inputSelector, { timeout: 5000 });
+                await this.page.focus(inputSelector);
+                await humanDelay(100, 200);
+            } catch (e) {
+                log('warning', `Could not focus input: ${e.message}`);
+            }
+            
+            // Clear the input first
+            await this.page.evaluate((selector) => {
+                const input = document.querySelector(selector);
+                if (input) {
+                    input.value = '';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
                 }
-                
+            }, inputSelector);
+            
+            // Type the Player ID using Puppeteer's type method (which properly triggers events)
+            await this.page.type(inputSelector, playerUid, { delay: 50 });
+            
+            // Also dispatch events manually for React compatibility
+            const fillResult = await this.page.evaluate((uid, selector) => {
+                const input = document.querySelector(selector);
                 if (!input) {
                     return { success: false, error: 'Input not found' };
                 }
                 
-                // Clear existing value
-                input.value = '';
+                // For React/Vue controlled components, we need to set the value
+                // and trigger React's synthetic events
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype, 'value'
+                ).set;
                 
-                // Dispatch FOCUS event
-                input.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+                nativeInputValueSetter.call(input, uid);
                 
-                // Set value character by character and dispatch INPUT events
-                for (let i = 0; i < uid.length; i++) {
-                    input.value += uid[i];
-                    input.dispatchEvent(new InputEvent('input', { 
-                        bubbles: true, 
-                        inputType: 'insertText',
-                        data: uid[i]
-                    }));
-                }
-                
-                // Dispatch CHANGE event
+                // Dispatch events that React listens to
+                input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
                 
-                // Dispatch BLUR event
-                input.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
-                
                 return { success: true, value: input.value };
-            }, playerUid);
+            }, playerUid, inputSelector);
             
             log('info', `Player ID fill result: ${JSON.stringify(fillResult)}`);
             
-            await humanDelay(300, 500);
+            await humanDelay(500, 800);
             screenshot = await takeScreenshot(this.page, '05_player_id_filled');
             if (screenshot) this.screenshots.push(screenshot);
             
