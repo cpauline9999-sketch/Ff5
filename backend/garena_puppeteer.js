@@ -441,27 +441,48 @@ class GarenaAutomation {
                 if (resultResponse.data.status === 1) {
                     // Success! Parse coordinates
                     const solution = resultResponse.data.request;
-                    log('info', `CAPTCHA solved! Solution: ${solution}`);
+                    log('info', `CAPTCHA solved! Solution: ${JSON.stringify(solution)}`);
                     
-                    // Parse coordinates from response (format: "x=123,y=456" or "coordinates:x=123,y=456")
-                    const coordMatch = solution.match(/x[=:]?\s*(\d+)[,;]?\s*y[=:]?\s*(\d+)/i);
-                    if (coordMatch) {
+                    // Handle array of coordinate objects (e.g., [{"x":"885","y":"568"}])
+                    if (Array.isArray(solution) && solution.length > 0) {
+                        const firstCoord = solution[0];
+                        if (firstCoord && firstCoord.x !== undefined && firstCoord.y !== undefined) {
+                            return {
+                                x: parseInt(firstCoord.x),
+                                y: parseInt(firstCoord.y)
+                            };
+                        }
+                    }
+                    
+                    // Handle string format: "x=123,y=456" or "coordinates:x=123,y=456"
+                    if (typeof solution === 'string') {
+                        const coordMatch = solution.match(/x[=:]?\s*(\d+)[,;]?\s*y[=:]?\s*(\d+)/i);
+                        if (coordMatch) {
+                            return {
+                                x: parseInt(coordMatch[1]),
+                                y: parseInt(coordMatch[2])
+                            };
+                        }
+                        
+                        // Alternative format: just numbers
+                        const numMatch = solution.match(/(\d+)[,\s]+(\d+)/);
+                        if (numMatch) {
+                            return {
+                                x: parseInt(numMatch[1]),
+                                y: parseInt(numMatch[2])
+                            };
+                        }
+                    }
+                    
+                    // Handle object format: {x: 123, y: 456}
+                    if (typeof solution === 'object' && solution.x !== undefined && solution.y !== undefined) {
                         return {
-                            x: parseInt(coordMatch[1]),
-                            y: parseInt(coordMatch[2])
+                            x: parseInt(solution.x),
+                            y: parseInt(solution.y)
                         };
                     }
                     
-                    // Alternative format: just numbers
-                    const numMatch = solution.match(/(\d+)[,\s]+(\d+)/);
-                    if (numMatch) {
-                        return {
-                            x: parseInt(numMatch[1]),
-                            y: parseInt(numMatch[2])
-                        };
-                    }
-                    
-                    log('warning', `Could not parse coordinates from: ${solution}`);
+                    log('warning', `Could not parse coordinates from: ${JSON.stringify(solution)}`);
                     return null;
                     
                 } else if (resultResponse.data.request === 'CAPCHA_NOT_READY') {
