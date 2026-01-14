@@ -312,6 +312,16 @@ class GarenaAutomation {
             screenshot = await takeScreenshot(this.page, '06_modal_login_clicked');
             if (screenshot) this.screenshots.push(screenshot);
             
+            // Check for and handle slider CAPTCHA
+            log('info', 'Checking for slider CAPTCHA...');
+            const hasCaptcha = await this.handleSliderCaptcha();
+            
+            if (hasCaptcha) {
+                await humanDelay(2000, 3000);
+                screenshot = await takeScreenshot(this.page, '06b_after_captcha');
+                if (screenshot) this.screenshots.push(screenshot);
+            }
+            
             // Wait for login to process and page to update
             log('info', 'Waiting for login to complete...');
             await humanDelay(3000, 5000);
@@ -364,6 +374,128 @@ class GarenaAutomation {
             log('error', `Login failed: ${e.message}`);
             const screenshot = await takeScreenshot(this.page, 'error_login');
             if (screenshot) this.screenshots.push(screenshot);
+            return false;
+        }
+    }
+    
+    async handleSliderCaptcha() {
+        try {
+            // Check if slider CAPTCHA is present
+            const captchaCheck = await this.page.evaluate(() => {
+                // Look for slider CAPTCHA elements
+                const sliderTexts = ['Slide right', 'slide to verify', 'Drag to verify'];
+                const pageText = document.body.textContent || '';
+                
+                for (const text of sliderTexts) {
+                    if (pageText.toLowerCase().includes(text.toLowerCase())) {
+                        return { hasCaptcha: true, type: 'slider' };
+                    }
+                }
+                
+                // Look for slider element
+                const sliderElements = document.querySelectorAll('[class*="slider"], [class*="captcha"], [class*="verify"]');
+                if (sliderElements.length > 0) {
+                    return { hasCaptcha: true, type: 'slider' };
+                }
+                
+                return { hasCaptcha: false };
+            });
+            
+            if (!captchaCheck.hasCaptcha) {
+                log('info', 'No slider CAPTCHA detected');
+                return false;
+            }
+            
+            log('info', 'Slider CAPTCHA detected! Attempting to solve...');
+            
+            // Take screenshot of CAPTCHA
+            const screenshot = await takeScreenshot(this.page, '06a_slider_captcha');
+            if (screenshot) this.screenshots.push(screenshot);
+            
+            // Try to solve the slider CAPTCHA manually (drag from left to right)
+            const solved = await this.page.evaluate(() => {
+                // Find the slider handle/button
+                const sliderHandles = document.querySelectorAll('[class*="slider"] button, [class*="slider"] [role="slider"], [class*="slider"] .handle, [class*="drag"], [class*="btn-slide"]');
+                
+                if (sliderHandles.length === 0) {
+                    return { solved: false, error: 'No slider handle found' };
+                }
+                
+                const handle = sliderHandles[0];
+                const rect = handle.getBoundingClientRect();
+                
+                // Simulate drag from left to right
+                const startX = rect.left + rect.width / 2;
+                const startY = rect.top + rect.height / 2;
+                const endX = startX + 300; // Drag 300px to the right
+                
+                // Create and dispatch mouse events
+                const mouseDown = new MouseEvent('mousedown', {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: startX,
+                    clientY: startY
+                });
+                
+                const mouseMove = new MouseEvent('mousemove', {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: endX,
+                    clientY: startY
+                });
+                
+                const mouseUp = new MouseEvent('mouseup', {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: endX,
+                    clientY: startY
+                });
+                
+                handle.dispatchEvent(mouseDown);
+                handle.dispatchEvent(mouseMove);
+                handle.dispatchEvent(mouseUp);
+                
+                return { solved: true, method: 'mouse events' };
+            });
+            
+            if (solved.solved) {
+                log('info', `Slider CAPTCHA solved using: ${solved.method}`);
+            } else {
+                log('warning', `Could not solve slider CAPTCHA: ${solved.error}`);
+                
+                // Try using Puppeteer's mouse to drag
+                try {
+                    const sliderHandle = await this.page.$('[class*="slider"] button, [class*="drag"], [class*="slider"] .handle');
+                    if (sliderHandle) {
+                        const box = await sliderHandle.boundingBox();
+                        if (box) {
+                            // Perform drag
+                            await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+                            await this.page.mouse.down();
+                            await humanDelay(100, 200);
+                            
+                            // Drag slowly to the right
+                            for (let i = 0; i < 10; i++) {
+                                await this.page.mouse.move(
+                                    box.x + box.width / 2 + (i + 1) * 30,
+                                    box.y + box.height / 2
+                                );
+                                await humanDelay(30, 50);
+                            }
+                            
+                            await this.page.mouse.up();
+                            log('info', 'Slider dragged using Puppeteer mouse');
+                        }
+                    }
+                } catch (e) {
+                    log('error', `Failed to drag slider: ${e.message}`);
+                }
+            }
+            
+            await humanDelay(1000, 2000);
+            return true;
+        } catch (e) {
+            log('error', `Error handling slider CAPTCHA: ${e.message}`);
             return false;
         }
     }
