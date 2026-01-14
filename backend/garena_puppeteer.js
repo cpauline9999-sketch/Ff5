@@ -1002,47 +1002,115 @@ class GarenaAutomation {
     }
     
     /**
-     * Perform human-like slider drag
+     * Generate human-like bezier curve movement points
+     */
+    generateHumanPath(startX, startY, endX, endY, numPoints = 50) {
+        const points = [];
+        
+        // Add some random control points for bezier curve
+        const cp1x = startX + (endX - startX) * 0.3 + (Math.random() - 0.5) * 20;
+        const cp1y = startY + (Math.random() - 0.5) * 10;
+        const cp2x = startX + (endX - startX) * 0.7 + (Math.random() - 0.5) * 20;
+        const cp2y = endY + (Math.random() - 0.5) * 10;
+        
+        for (let i = 0; i <= numPoints; i++) {
+            const t = i / numPoints;
+            
+            // Cubic bezier interpolation
+            const x = Math.pow(1 - t, 3) * startX +
+                     3 * Math.pow(1 - t, 2) * t * cp1x +
+                     3 * (1 - t) * Math.pow(t, 2) * cp2x +
+                     Math.pow(t, 3) * endX;
+            
+            const y = Math.pow(1 - t, 3) * startY +
+                     3 * Math.pow(1 - t, 2) * t * cp1y +
+                     3 * (1 - t) * Math.pow(t, 2) * cp2y +
+                     Math.pow(t, 3) * endY;
+            
+            // Add tiny random noise for more natural movement
+            points.push({
+                x: x + (Math.random() - 0.5) * 2,
+                y: y + (Math.random() - 0.5) * 2
+            });
+        }
+        
+        return points;
+    }
+    
+    /**
+     * Perform human-like slider drag with advanced anti-detection
      */
     async performSliderDrag(startX, startY, dragDistance) {
         try {
             log('info', `Performing slider drag from (${startX.toFixed(0)}, ${startY.toFixed(0)}) distance=${dragDistance}...`);
             
-            // Move to start position
-            await this.page.mouse.move(startX, startY);
-            await humanDelay(100, 200);
+            // Move to slightly off-center of start position first (like a human would)
+            const approachX = startX + (Math.random() - 0.5) * 10;
+            const approachY = startY + (Math.random() - 0.5) * 5;
+            await this.page.mouse.move(approachX, approachY);
+            await humanDelay(80, 150);
             
-            // Mouse down
-            await this.page.mouse.down();
+            // Move to exact position
+            await this.page.mouse.move(startX, startY);
             await humanDelay(50, 100);
             
-            // Human-like drag with acceleration/deceleration and slight vertical wobble
-            const steps = 30;
-            for (let i = 1; i <= steps; i++) {
-                const progress = i / steps;
+            // Small pause before clicking (human hesitation)
+            await humanDelay(100, 250);
+            
+            // Mouse down with slight delay variation
+            await this.page.mouse.down();
+            await humanDelay(30, 80);
+            
+            // Generate human-like path
+            const endX = startX + dragDistance;
+            const endY = startY + (Math.random() - 0.5) * 4; // Slight vertical variance at end
+            const pathPoints = this.generateHumanPath(startX, startY, endX, endY, 40);
+            
+            // Move along the path with variable speed
+            // Humans are slow at start, faster in middle, slow at end
+            for (let i = 0; i < pathPoints.length; i++) {
+                const point = pathPoints[i];
+                const progress = i / pathPoints.length;
                 
-                // Ease-out curve for more natural movement
-                const easeProgress = 1 - Math.pow(1 - progress, 3);
-                const xOffset = dragDistance * easeProgress;
+                // Calculate delay based on position - bell curve (slower at start/end)
+                let baseDelay;
+                if (progress < 0.15) {
+                    // Start slow
+                    baseDelay = randomDelay(15, 35);
+                } else if (progress < 0.8) {
+                    // Middle - faster
+                    baseDelay = randomDelay(5, 15);
+                } else {
+                    // End - slow down (approaching target)
+                    baseDelay = randomDelay(10, 25);
+                }
                 
-                // Slight vertical wobble for human-like movement
-                const yOffset = Math.sin(progress * Math.PI * 2) * 2;
+                // Add occasional micro-pauses (human hesitation)
+                if (Math.random() < 0.05) {
+                    await sleep(randomDelay(30, 80));
+                }
                 
-                await this.page.mouse.move(startX + xOffset, startY + yOffset);
-                
-                // Variable delay for human-like speed
-                const delay = progress < 0.3 ? randomDelay(10, 25) : randomDelay(5, 15);
-                await sleep(delay);
+                await this.page.mouse.move(point.x, point.y);
+                await sleep(baseDelay);
             }
             
-            // Small pause before release
-            await humanDelay(50, 150);
+            // Slight overshoot and correction (common human behavior)
+            const overshoot = Math.random() < 0.3;
+            if (overshoot) {
+                await this.page.mouse.move(endX + randomDelay(5, 15), endY);
+                await sleep(randomDelay(30, 60));
+                await this.page.mouse.move(endX, endY);
+                await sleep(randomDelay(20, 50));
+            }
+            
+            // Small pause before release (human settling on position)
+            await humanDelay(80, 180);
             
             // Mouse up
             await this.page.mouse.up();
             
             log('info', 'Slider drag completed');
-            await humanDelay(2000, 3000);
+            await humanDelay(2500, 4000);
             
             // Take screenshot after drag
             const screenshot = await takeScreenshot(this.page, '07b_after_slider_drag');
