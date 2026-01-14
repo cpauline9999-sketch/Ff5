@@ -1058,6 +1058,29 @@ class GarenaAutomation {
      */
     async checkIfCaptchaSolved() {
         try {
+            // First check ALL iframes for CAPTCHA text (since CAPTCHA is typically in iframe)
+            const frames = this.page.frames();
+            
+            for (const frame of frames) {
+                try {
+                    const frameHasCaptcha = await frame.evaluate(() => {
+                        const text = document.body.innerText || document.body.textContent || '';
+                        return text.includes('Slide right') || 
+                               text.includes('slide to verify') ||
+                               text.includes('secure your access') ||
+                               text.includes('验证');
+                    });
+                    
+                    if (frameHasCaptcha) {
+                        log('info', 'CAPTCHA text still found in iframe - NOT solved');
+                        return false;
+                    }
+                } catch (e) {
+                    // Skip inaccessible frames
+                    continue;
+                }
+            }
+            
             // Check main page
             const mainPageCheck = await this.page.evaluate(() => {
                 const text = document.body.innerText || document.body.textContent || '';
@@ -1073,46 +1096,48 @@ class GarenaAutomation {
                                   text.includes('Success') ||
                                   text.includes('验证通过');
                 
-                // Check if CAPTCHA elements are still visible
-                const captchaElement = document.querySelector('div[class*="nc_wrapper"], div[class*="slider_verify"]');
-                const isVisible = captchaElement && 
-                    captchaElement.offsetParent !== null &&
-                    window.getComputedStyle(captchaElement).display !== 'none';
+                // Check if CAPTCHA/modal overlay elements are still visible
+                const captchaSelectors = [
+                    'div[class*="nc_wrapper"]', 
+                    'div[class*="slider_verify"]',
+                    'div[class*="captcha"]',
+                    'iframe[src*="captcha"]'
+                ];
+                
+                let captchaVisible = false;
+                for (const sel of captchaSelectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.offsetParent !== null) {
+                        const style = window.getComputedStyle(el);
+                        if (style.display !== 'none' && style.visibility !== 'hidden') {
+                            captchaVisible = true;
+                            break;
+                        }
+                    }
+                }
                 
                 return {
                     hasCaptchaText,
                     hasSuccess,
-                    captchaVisible: isVisible
+                    captchaVisible
                 };
             });
             
             log('info', `CAPTCHA solved check: hasCaptchaText=${mainPageCheck.hasCaptchaText}, hasSuccess=${mainPageCheck.hasSuccess}, captchaVisible=${mainPageCheck.captchaVisible}`);
             
-            // CAPTCHA is solved if success message appears OR if captcha text is gone
+            // If there's a visible CAPTCHA iframe, it's NOT solved
+            if (mainPageCheck.captchaVisible) {
+                return false;
+            }
+            
+            // CAPTCHA is solved if success message appears
             if (mainPageCheck.hasSuccess) {
                 return true;
             }
             
+            // If no captcha text and no visible captcha elements, consider it solved
             if (!mainPageCheck.hasCaptchaText && !mainPageCheck.captchaVisible) {
                 return true;
-            }
-            
-            // Also check all iframes
-            const frames = this.page.frames();
-            for (const frame of frames) {
-                try {
-                    const frameCheck = await frame.evaluate(() => {
-                        const text = document.body.innerText || '';
-                        return !text.includes('Slide right') && !text.includes('secure your access');
-                    });
-                    
-                    if (frameCheck) {
-                        // Frame doesn't have CAPTCHA text anymore
-                        continue;
-                    }
-                } catch (e) {
-                    continue;
-                }
             }
             
             return false;
