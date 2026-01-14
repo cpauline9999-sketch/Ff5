@@ -544,67 +544,105 @@ class GarenaAutomation {
             });
             
             if (modalCheck.hasModal && modalCheck.type === 'freefire_login') {
-                log('info', 'Free Fire login modal appeared - this is for re-authentication');
+                log('info', 'Free Fire login modal appeared - need to re-authenticate');
                 
                 // Take a screenshot of the modal
                 screenshot = await takeScreenshot(this.page, '12c_modal_appeared');
                 if (screenshot) this.screenshots.push(screenshot);
                 
-                // Try to close the modal by pressing Escape or clicking outside
-                log('info', 'Attempting to close modal...');
+                // The modal is asking for Player ID again - we need to fill it and click Login
+                log('info', 'Filling Player ID in the payment authentication modal...');
                 
-                // Method 1: Press Escape key
                 try {
-                    await this.page.keyboard.press('Escape');
-                    log('info', 'Pressed Escape key');
-                    await humanDelay(500, 1000);
-                } catch (e) {
-                    log('warning', `Could not press Escape: ${e.message}`);
-                }
-                
-                // Check if modal is still there
-                const stillHasModal = await this.page.evaluate(() => {
-                    const modalOverlay = document.querySelector('.modal, .overlay, [role="dialog"]');
-                    return !!modalOverlay;
-                });
-                
-                if (stillHasModal) {
-                    // Method 2: Click outside the modal (on the overlay/background)
-                    try {
-                        await this.page.evaluate(() => {
-                            // Click on the page body/backdrop
-                            const backdrop = document.querySelector('.modal-backdrop, .overlay-backdrop, body');
-                            if (backdrop) {
-                                backdrop.click();
+                    // Look for Player ID input in the modal
+                    const modalInputSelectors = [
+                        'input[placeholder*="player ID" i]',
+                        'input[placeholder*="Player ID" i]',
+                        'input[name*="player" i]',
+                        'input[type="text"]'
+                    ];
+                    
+                    let filled = false;
+                    for (const selector of modalInputSelectors) {
+                        try {
+                            const inputs = await this.page.$$(selector);
+                            for (const input of inputs) {
+                                // Check if this input is visible (in the modal)
+                                const isVisible = await input.isIntersectingViewport();
+                                if (isVisible) {
+                                    await input.click();
+                                    await humanDelay(100, 200);
+                                    // Clear any existing value
+                                    await input.evaluate(el => el.value = '');
+                                    await input.type(CONFIG.TEST_PLAYER_UID, { delay: randomDelay(20, 50) });
+                                    log('info', `Filled Player ID in modal using: ${selector}`);
+                                    filled = true;
+                                    break;
+                                }
                             }
-                            // Also try clicking at specific coordinates (top-left corner)
-                            const event = new MouseEvent('click', {
-                                bubbles: true,
-                                cancelable: true,
-                                clientX: 10,
-                                clientY: 10
-                            });
-                            document.elementFromPoint(10, 10)?.dispatchEvent(event);
-                        });
-                        log('info', 'Clicked outside modal');
-                        await humanDelay(500, 1000);
-                    } catch (e) {
-                        log('warning', `Could not click outside modal: ${e.message}`);
+                            if (filled) break;
+                        } catch (e) {
+                            continue;
+                        }
                     }
-                }
-                
-                // Method 3: Try clicking at coordinates outside the modal
-                try {
-                    await this.page.mouse.click(50, 50);
-                    log('info', 'Clicked at coordinates outside modal');
+                    
+                    if (!filled) {
+                        // Try using page.evaluate to find the modal's input
+                        await this.page.evaluate((playerId) => {
+                            // Find the modal
+                            const modal = document.querySelector('.modal, [role="dialog"], .overlay');
+                            if (modal) {
+                                const input = modal.querySelector('input[type="text"], input[placeholder*="player" i]');
+                                if (input) {
+                                    input.value = playerId;
+                                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                                }
+                            }
+                        }, CONFIG.TEST_PLAYER_UID);
+                        log('info', 'Filled Player ID using page.evaluate');
+                    }
+                    
                     await humanDelay(500, 1000);
+                    screenshot = await takeScreenshot(this.page, '12d_modal_player_id_filled');
+                    if (screenshot) this.screenshots.push(screenshot);
+                    
+                    // Now click the Login button in the modal
+                    const loginClicked = await this.page.evaluate(() => {
+                        // Find Login button in the modal
+                        const modal = document.querySelector('.modal, [role="dialog"], .overlay') || document;
+                        const buttons = modal.querySelectorAll('button, a');
+                        
+                        for (const btn of buttons) {
+                            const text = (btn.textContent || '').trim().toLowerCase();
+                            if (text === 'login') {
+                                btn.click();
+                                return { clicked: true };
+                            }
+                        }
+                        
+                        // Also try clicking any submit button
+                        const submitBtn = modal.querySelector('button[type="submit"]');
+                        if (submitBtn) {
+                            submitBtn.click();
+                            return { clicked: true };
+                        }
+                        
+                        return { clicked: false };
+                    });
+                    
+                    if (loginClicked.clicked) {
+                        log('info', 'Clicked Login button in modal');
+                    } else {
+                        log('warning', 'Could not find Login button in modal');
+                    }
+                    
+                    await humanDelay(3000, 5000);
+                    screenshot = await takeScreenshot(this.page, '12e_after_modal_login');
+                    if (screenshot) this.screenshots.push(screenshot);
+                    
                 } catch (e) {
-                    log('warning', `Could not click at coordinates: ${e.message}`);
+                    log('error', `Error interacting with modal: ${e.message}`);
                 }
-                
-                // Take screenshot after attempting to close
-                screenshot = await takeScreenshot(this.page, '12d_after_close_attempt');
-                if (screenshot) this.screenshots.push(screenshot);
             }
             
             // Wait for new page
