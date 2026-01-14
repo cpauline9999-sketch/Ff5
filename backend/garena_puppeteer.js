@@ -1084,6 +1084,10 @@ class GarenaAutomation {
     }
     
     async runTopUp(playerUid, diamondAmount) {
+        // Store playerUid for use in other methods
+        this.playerUid = playerUid;
+        this.diamondAmount = diamondAmount;
+        
         const result = {
             success: false,
             message: '',
