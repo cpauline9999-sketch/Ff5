@@ -296,18 +296,10 @@ class GarenaAutomation {
             screenshot = await takeScreenshot(this.page, '05_player_id_filled');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Check for and solve CAPTCHA BEFORE clicking login
-            log('info', 'Checking for CAPTCHA (must solve before login)...');
-            const captchaSolved = await this.solveCaptchaIfPresent();
+            // Note: CAPTCHA appears AFTER clicking Login, not before
+            // So we check and solve it after clicking
             
-            if (captchaSolved === 'unsolved') {
-                log('error', 'CAPTCHA exists but could not be solved - cannot proceed');
-                screenshot = await takeScreenshot(this.page, '05b_captcha_unsolved');
-                if (screenshot) this.screenshots.push(screenshot);
-                return false;
-            }
-            
-            await humanDelay(500, 1000);
+            await humanDelay(500, 800);
             screenshot = await takeScreenshot(this.page, '06_before_login_click');
             if (screenshot) this.screenshots.push(screenshot);
             
@@ -324,6 +316,21 @@ class GarenaAutomation {
             await humanDelay(1500, 2000);
             screenshot = await takeScreenshot(this.page, '07_after_login_click');
             if (screenshot) this.screenshots.push(screenshot);
+            
+            // NOW check for and solve CAPTCHA (it appears AFTER clicking Login)
+            log('info', 'Checking for CAPTCHA (appears after clicking Login)...');
+            const captchaResult = await this.solveCaptchaIfPresent();
+            
+            if (captchaResult === 'solved') {
+                log('info', 'CAPTCHA solved, waiting for login to process...');
+                await humanDelay(3000, 5000);
+                screenshot = await takeScreenshot(this.page, '07b_after_captcha_solved');
+                if (screenshot) this.screenshots.push(screenshot);
+            } else if (captchaResult === 'unsolved') {
+                log('warning', 'CAPTCHA could not be solved automatically');
+                screenshot = await takeScreenshot(this.page, '07b_captcha_unsolved');
+                if (screenshot) this.screenshots.push(screenshot);
+            }
             
             // Wait for login to process
             log('info', 'Waiting for login to complete...');
