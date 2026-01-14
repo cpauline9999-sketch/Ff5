@@ -776,16 +776,24 @@ class GarenaAutomation {
             
             // Attempt 1: Use found handle coordinates
             if (handleRect && handleRect.x !== undefined && !isNaN(handleRect.x)) {
-                log('info', `Found slider handle at: x=${handleRect.x}, y=${handleRect.y}, selector=${handleRect.selector || 'unknown'}`);
+                log('info', `Found slider handle at: x=${handleRect.x}, y=${handleRect.y}, selector=${handleRect.selector || 'unknown'}, source=${handleRect.source || 'unknown'}`);
                 
                 const startX = handleRect.x + handleRect.width / 2;
                 const startY = handleRect.y + handleRect.height / 2;
                 
-                // Calculate drag distance (track width minus handle position, or use default)
+                // Calculate drag distance using container/track info
                 let dragDistance = 280;
-                if (sliderTrack) {
+                if (sliderContainer) {
+                    // Drag from current position to right edge of container (minus padding)
+                    dragDistance = (sliderContainer.x + sliderContainer.width - 30) - startX;
+                    log('info', `Calculated drag distance from container: ${dragDistance}px`);
+                }
+                if (sliderTrack && dragDistance < 100) {
                     dragDistance = sliderTrack.width - (handleRect.x - sliderTrack.x) - handleRect.width - 10;
-                    if (dragDistance < 100) dragDistance = 280;
+                }
+                if (dragDistance < 100 || dragDistance > 500) {
+                    dragDistance = 280;
+                    log('info', `Using default drag distance: ${dragDistance}px`);
                 }
                 
                 log('info', `Dragging slider from (${startX.toFixed(0)}, ${startY.toFixed(0)}) by ${dragDistance}px...`);
@@ -801,8 +809,15 @@ class GarenaAutomation {
                 log('info', 'First drag attempt may have failed, trying with different distance...');
                 await humanDelay(1000, 2000);
                 
-                const result2 = await this.performSliderDrag(startX, startY, dragDistance * 0.85);
+                const result2 = await this.performSliderDrag(startX, startY, dragDistance * 0.9);
                 if (result2 === 'solved') {
+                    return 'solved';
+                }
+                
+                // Try with slightly different Y position (sometimes handle detection is off vertically)
+                await humanDelay(500, 1000);
+                const result3 = await this.performSliderDrag(startX, startY - 5, dragDistance);
+                if (result3 === 'solved') {
                     return 'solved';
                 }
             }
