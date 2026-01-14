@@ -390,46 +390,97 @@ class GarenaAutomation {
     
     async solveCaptchaIfPresent() {
         try {
-            // Check if CAPTCHA/slider verification exists
+            // Wait a moment for any dynamic content to load
+            await humanDelay(500, 1000);
+            
+            // Take screenshot first to see current state
+            let screenshot = await takeScreenshot(this.page, '07a_checking_captcha');
+            if (screenshot) this.screenshots.push(screenshot);
+            
+            // Check if CAPTCHA/slider verification exists - use multiple detection methods
             const captchaCheck = await this.page.evaluate(() => {
-                // Look for the slider verification text
-                const pageText = document.body.textContent || '';
+                // Method 1: Check page text for slider phrases
+                const pageText = document.body.innerText || document.body.textContent || '';
                 const hasSliderText = pageText.includes('Slide right') || 
                                       pageText.includes('slide to verify') ||
                                       pageText.includes('Drag to verify') ||
                                       pageText.includes('secure your access');
                 
-                // Look for captcha div
-                const captchaDiv = document.querySelector('div[class*="captcha"], div[class*="slider"], div[class*="verify"]');
+                // Method 2: Look for any element with captcha/slider classes
+                const captchaSelectors = [
+                    'div[class*="captcha"]',
+                    'div[class*="slider"]',
+                    'div[class*="verify"]',
+                    'div[class*="geetest"]',
+                    'div[class*="slide"]',
+                    '[class*="nc_"]',
+                    '[class*="nc-"]'
+                ];
                 
-                if (hasSliderText || captchaDiv) {
-                    // Find the slider handle
-                    const sliderHandle = document.querySelector(
-                        'div[class*="slider"] div[draggable], ' +
-                        'div[class*="slider"] button, ' +
-                        'div[class*="drag"], ' +
-                        '[class*="slider-btn"], ' +
-                        '[class*="slide-btn"]'
-                    );
-                    
-                    // Find the slider track
-                    const sliderTrack = document.querySelector(
-                        'div[class*="slider"], ' +
-                        '[class*="slide-track"], ' +
-                        '[class*="slider-track"]'
-                    );
-                    
-                    return { 
-                        exists: true, 
-                        hasSlider: !!sliderHandle,
-                        hasTrack: !!sliderTrack,
-                        handleRect: sliderHandle ? sliderHandle.getBoundingClientRect() : null,
-                        trackRect: sliderTrack ? sliderTrack.getBoundingClientRect() : null
-                    };
+                let captchaDiv = null;
+                for (const sel of captchaSelectors) {
+                    captchaDiv = document.querySelector(sel);
+                    if (captchaDiv && captchaDiv.offsetParent !== null) break;
                 }
                 
-                return { exists: false };
+                // Method 3: Look for slider handle by various selectors
+                const handleSelectors = [
+                    'div[class*="slider"] div[draggable]',
+                    'div[class*="slider"] button',
+                    'div[class*="slide"] span',
+                    '[class*="slider-btn"]',
+                    '[class*="slide-btn"]',
+                    '[class*="nc_iconfont"]',
+                    '[class*="btn_slide"]',
+                    'span[class*="nc_"]'
+                ];
+                
+                let sliderHandle = null;
+                let handleRect = null;
+                for (const sel of handleSelectors) {
+                    sliderHandle = document.querySelector(sel);
+                    if (sliderHandle && sliderHandle.offsetParent !== null) {
+                        handleRect = sliderHandle.getBoundingClientRect();
+                        if (handleRect.width > 0) break;
+                    }
+                }
+                
+                // Method 4: Find elements by text content
+                if (!sliderHandle) {
+                    const allElements = document.querySelectorAll('*');
+                    for (const el of allElements) {
+                        const text = el.innerText || el.textContent || '';
+                        if (text.includes('Slide right') && el.offsetParent !== null) {
+                            // Found the slider text, look for handle nearby
+                            const parent = el.closest('div');
+                            if (parent) {
+                                const handle = parent.querySelector('span, button, div[draggable]');
+                                if (handle) {
+                                    sliderHandle = handle;
+                                    handleRect = handle.getBoundingClientRect();
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                const exists = hasSliderText || captchaDiv;
+                
+                return { 
+                    exists: exists,
+                    hasSliderText: hasSliderText,
+                    hasCaptchaDiv: !!captchaDiv,
+                    hasSliderHandle: !!sliderHandle,
+                    handleRect: handleRect,
+                    debugInfo: {
+                        pageTextLength: pageText.length,
+                        foundCaptchaDiv: captchaDiv ? captchaDiv.className : null
+                    }
+                };
             });
+            
+            log('info', `CAPTCHA check result: exists=${captchaCheck.exists}, hasText=${captchaCheck.hasSliderText}, hasDiv=${captchaCheck.hasCaptchaDiv}, hasHandle=${captchaCheck.hasSliderHandle}`);
+            log('info', `Debug info: ${JSON.stringify(captchaCheck.debugInfo)}`);
             
             if (!captchaCheck.exists) {
                 log('info', 'No CAPTCHA/slider verification detected');
@@ -438,13 +489,72 @@ class GarenaAutomation {
             
             log('info', 'Slider verification detected! Attempting to solve...');
             
-            const screenshot = await takeScreenshot(this.page, '07a_slider_detected');
+            screenshot = await takeScreenshot(this.page, '07a_slider_detected');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Try to solve the slider
-            if (captchaCheck.handleRect) {
-                const handleRect = captchaCheck.handleRect;
+            // Try to find the slider handle if we didn't get coordinates
+            let handleRect = captchaCheck.handleRect;
+            
+            if (!handleRect) {
+                // Try using Puppeteer to find the slider
+                const handleSelectors = [
+                    'div[class*="slider"] span',
+                    'div[class*="slide"] span',
+                    '[class*="nc_iconfont"]',
+                    'span[class*="btn"]'
+                ];
                 
+                for (const sel of handleSelectors) {
+                    try {
+                        const handle = await this.page.$(sel);
+                        if (handle) {
+                            const box = await handle.boundingBox();
+                            if (box && box.width > 0) {
+                                handleRect = box;
+                                log('info', `Found slider handle via Puppeteer: ${sel}`);
+                                break;
+                            }
+                        }
+                    } catch (e) {
+                        continue;
+                    }
+                }
+            }
+            
+            if (!handleRect) {
+                log('warning', 'Could not find slider handle - trying alternative method');
+                
+                // Alternative: Try to find by looking at all clickable elements near "Slide right" text
+                const altResult = await this.page.evaluate(() => {
+                    // Find the slider container
+                    const sliderText = Array.from(document.querySelectorAll('*')).find(
+                        el => (el.innerText || '').includes('Slide right')
+                    );
+                    
+                    if (sliderText) {
+                        const container = sliderText.closest('div') || sliderText.parentElement;
+                        if (container) {
+                            // Find any small element that could be the handle (usually at the left side)
+                            const children = container.querySelectorAll('span, button, div');
+                            for (const child of children) {
+                                const rect = child.getBoundingClientRect();
+                                // Handle is usually small (20-50px) and positioned at the left
+                                if (rect.width > 10 && rect.width < 60 && rect.height > 10) {
+                                    return { found: true, rect: rect };
+                                }
+                            }
+                        }
+                    }
+                    return { found: false };
+                });
+                
+                if (altResult.found) {
+                    handleRect = altResult.rect;
+                    log('info', 'Found slider handle via alternative method');
+                }
+            }
+            
+            if (handleRect) {
                 // Start position (center of handle)
                 const startX = handleRect.x + handleRect.width / 2;
                 const startY = handleRect.y + handleRect.height / 2;
@@ -464,9 +574,8 @@ class GarenaAutomation {
                 const steps = 25;
                 for (let i = 1; i <= steps; i++) {
                     const progress = i / steps;
-                    // Add slight curve and variation for human-like movement
                     const xOffset = dragDistance * progress;
-                    const yOffset = Math.sin(progress * Math.PI) * 3; // Slight arc
+                    const yOffset = Math.sin(progress * Math.PI) * 3;
                     
                     await this.page.mouse.move(
                         startX + xOffset,
@@ -475,22 +584,18 @@ class GarenaAutomation {
                     await humanDelay(15, 35);
                 }
                 
-                // Small pause at the end
                 await humanDelay(50, 100);
-                
-                // Release mouse
                 await this.page.mouse.up();
                 
                 log('info', 'Slider dragged');
-                await humanDelay(1500, 2500);
+                await humanDelay(2000, 3000);
                 
-                // Take screenshot after drag
-                const afterScreenshot = await takeScreenshot(this.page, '07a_after_slider_drag');
-                if (afterScreenshot) this.screenshots.push(afterScreenshot);
+                screenshot = await takeScreenshot(this.page, '07b_after_slider_drag');
+                if (screenshot) this.screenshots.push(screenshot);
                 
-                // Check if CAPTCHA is solved (slider text should disappear)
+                // Check if CAPTCHA is solved
                 const captchaStillExists = await this.page.evaluate(() => {
-                    const pageText = document.body.textContent || '';
+                    const pageText = document.body.innerText || '';
                     return pageText.includes('Slide right') || pageText.includes('secure your access');
                 });
                 
@@ -498,11 +603,11 @@ class GarenaAutomation {
                     log('info', 'Slider verification solved successfully!');
                     return 'solved';
                 } else {
-                    log('warning', 'Slider still present after drag - may need retry');
+                    log('warning', 'Slider still present after drag');
                     return 'unsolved';
                 }
             } else {
-                log('warning', 'Could not find slider handle');
+                log('warning', 'Could not find slider handle coordinates');
                 return 'unsolved';
             }
             
