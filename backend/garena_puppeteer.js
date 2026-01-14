@@ -216,9 +216,9 @@ class GarenaAutomation {
     
     async performLogin(playerUid) {
         try {
-            log('info', 'Starting login process...');
+            log('info', 'Starting login process (with proper JS event sequence)...');
             
-            // Click Login button
+            // Click Login button to open modal
             const loginSelectors = [
                 'text/Login',
                 'button:has-text("Login")'
@@ -234,268 +234,327 @@ class GarenaAutomation {
                 }
             }
             
-            await humanDelay(300, 600);
+            await humanDelay(500, 800);
             let screenshot = await takeScreenshot(this.page, '04_login_clicked');
             if (screenshot) this.screenshots.push(screenshot);
             
-            // Wait for modal
+            // Wait for modal to appear
             log('info', 'Waiting for login modal...');
-            await humanDelay(500, 800);
+            await humanDelay(500, 1000);
             
-            // Fill Player ID
-            log('info', `Filling Player ID: ${playerUid}`);
-            const uidSelectors = [
-                'input[placeholder*="player ID" i]',
-                'input[placeholder*="Player ID" i]',
-                'input[name="user_id"]',
-                'input[type="text"]'
-            ];
+            // Fill Player ID with PROPER EVENT SEQUENCE
+            log('info', `Filling Player ID: ${playerUid} with proper JS events...`);
             
-            for (const selector of uidSelectors) {
-                try {
-                    await this.page.waitForSelector(selector, { timeout: 5000 });
-                    await this.page.click(selector);
-                    await humanDelay(100, 200);
-                    // Clear any existing value first
-                    await this.page.evaluate((sel) => {
-                        const input = document.querySelector(sel);
-                        if (input) input.value = '';
-                    }, selector);
-                    await this.page.type(selector, playerUid, { delay: randomDelay(20, 50) });
-                    log('info', `Player ID filled using: ${selector}`);
-                    break;
-                } catch (e) {
-                    continue;
+            const fillResult = await this.page.evaluate((uid) => {
+                // Find the Player ID input
+                const inputSelectors = [
+                    'input[name="user_id"]',
+                    'input[id*="user"]',
+                    'input[placeholder*="Player" i]',
+                    'input[placeholder*="player" i]'
+                ];
+                
+                let input = null;
+                for (const selector of inputSelectors) {
+                    input = document.querySelector(selector);
+                    if (input) break;
                 }
-            }
+                
+                if (!input) {
+                    return { success: false, error: 'Input not found' };
+                }
+                
+                // Clear existing value
+                input.value = '';
+                
+                // Dispatch FOCUS event
+                input.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+                
+                // Set value character by character and dispatch INPUT events
+                for (let i = 0; i < uid.length; i++) {
+                    input.value += uid[i];
+                    input.dispatchEvent(new InputEvent('input', { 
+                        bubbles: true, 
+                        inputType: 'insertText',
+                        data: uid[i]
+                    }));
+                }
+                
+                // Dispatch CHANGE event
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // Dispatch BLUR event
+                input.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+                
+                return { success: true, value: input.value };
+            }, playerUid);
             
+            log('info', `Player ID fill result: ${JSON.stringify(fillResult)}`);
+            
+            await humanDelay(300, 500);
             screenshot = await takeScreenshot(this.page, '05_player_id_filled');
             if (screenshot) this.screenshots.push(screenshot);
             
-            await humanDelay(300, 500);
+            // Check for and solve CAPTCHA BEFORE clicking login
+            log('info', 'Checking for CAPTCHA (must solve before login)...');
+            const captchaSolved = await this.solveCaptchaIfPresent();
             
-            // Click Login/Submit button in the form
-            log('info', 'Clicking Login button to submit...');
-            
-            // Try different ways to submit
-            const submitted = await this.page.evaluate(() => {
-                // Find the login button in the form
-                const buttons = document.querySelectorAll('button');
-                for (const btn of buttons) {
-                    const text = (btn.textContent || '').trim().toLowerCase();
-                    if (text === 'login') {
-                        btn.click();
-                        return { clicked: true, method: 'button text' };
-                    }
-                }
-                
-                // Try submit button
-                const submitBtn = document.querySelector('button[type="submit"]');
-                if (submitBtn) {
-                    submitBtn.click();
-                    return { clicked: true, method: 'submit button' };
-                }
-                
-                // Try form submit
-                const form = document.querySelector('form');
-                if (form) {
-                    form.submit();
-                    return { clicked: true, method: 'form submit' };
-                }
-                
-                return { clicked: false };
-            });
-            
-            log('info', `Login submit: ${JSON.stringify(submitted)}`);
-            
-            await humanDelay(1000, 1500);
-            screenshot = await takeScreenshot(this.page, '06_modal_login_clicked');
-            if (screenshot) this.screenshots.push(screenshot);
-            
-            // Check for and handle slider CAPTCHA
-            log('info', 'Checking for slider CAPTCHA...');
-            const hasCaptcha = await this.handleSliderCaptcha();
-            
-            if (hasCaptcha) {
-                await humanDelay(2000, 3000);
-                screenshot = await takeScreenshot(this.page, '06b_after_captcha');
+            if (captchaSolved === 'unsolved') {
+                log('error', 'CAPTCHA exists but could not be solved - cannot proceed');
+                screenshot = await takeScreenshot(this.page, '05b_captcha_unsolved');
                 if (screenshot) this.screenshots.push(screenshot);
+                return false;
             }
             
-            // Wait for login to process and page to update
+            await humanDelay(500, 1000);
+            screenshot = await takeScreenshot(this.page, '06_before_login_click');
+            if (screenshot) this.screenshots.push(screenshot);
+            
+            // Click Login button with PROPER MOUSE EVENT SEQUENCE
+            log('info', 'Clicking Login button with proper mouse events...');
+            
+            const loginClicked = await this.clickLoginButtonWithMouseEvents();
+            
+            if (!loginClicked) {
+                log('error', 'Failed to click login button');
+                return false;
+            }
+            
+            await humanDelay(1500, 2000);
+            screenshot = await takeScreenshot(this.page, '07_after_login_click');
+            if (screenshot) this.screenshots.push(screenshot);
+            
+            // Wait for login to process
             log('info', 'Waiting for login to complete...');
             await humanDelay(3000, 5000);
             
-            // Check if login was successful by looking for username display
+            // Check if login was successful
             const loginStatus = await this.page.evaluate(() => {
-                // Look for username element
-                const usernameSelectors = ['.username', '.user-name', '[data-username]', '.player-name'];
+                // SUCCESS: Player ID input is removed OR hidden
+                const playerIdInput = document.querySelector('input[name="user_id"], input[placeholder*="Player" i]');
+                const inputVisible = playerIdInput && 
+                    playerIdInput.offsetParent !== null &&
+                    window.getComputedStyle(playerIdInput).display !== 'none' &&
+                    window.getComputedStyle(playerIdInput).visibility !== 'hidden';
+                
+                // SUCCESS: Username element becomes visible
+                const usernameSelectors = ['.username', '.user-name', '[data-username]'];
+                let usernameEl = null;
                 for (const sel of usernameSelectors) {
-                    const el = document.querySelector(sel);
-                    if (el && el.textContent.trim()) {
-                        return { success: true, username: el.textContent.trim() };
-                    }
+                    usernameEl = document.querySelector(sel);
+                    if (usernameEl && usernameEl.textContent.trim()) break;
                 }
                 
-                // Check if login form is still visible (means login failed)
-                const loginForm = document.querySelector('input[placeholder*="player" i]');
-                if (loginForm) {
-                    // Check if the form is in an error state
-                    const errorMsg = document.querySelector('.error, .alert-error, [class*="error"]');
-                    if (errorMsg) {
-                        return { success: false, error: errorMsg.textContent.trim() };
-                    }
-                    return { success: false, error: 'Login form still visible' };
+                // Check for "Welcome" text
+                const hasWelcome = document.body.textContent.includes('Welcome');
+                
+                if (!inputVisible || usernameEl || hasWelcome) {
+                    return { 
+                        success: true, 
+                        username: usernameEl ? usernameEl.textContent.trim() : 'unknown',
+                        reason: !inputVisible ? 'input hidden' : 'username visible'
+                    };
                 }
                 
-                // Check page content for logged-in indicators
-                const pageText = document.body.textContent || '';
-                if (pageText.includes('Welcome') || pageText.includes('Logged in')) {
-                    return { success: true, username: 'unknown' };
-                }
-                
-                return { success: false, error: 'Unable to determine login status' };
+                return { success: false, error: 'Player ID input still visible' };
             });
             
             log('info', `Login status: ${JSON.stringify(loginStatus)}`);
             
-            screenshot = await takeScreenshot(this.page, '07_after_login');
+            screenshot = await takeScreenshot(this.page, '08_login_result');
             if (screenshot) this.screenshots.push(screenshot);
             
             if (loginStatus.success) {
-                log('info', `Login successful! Username: ${loginStatus.username}`);
+                log('info', `LOGIN SUCCESSFUL! Username: ${loginStatus.username}`);
+                return true;
             } else {
-                log('warning', `Login may have failed: ${loginStatus.error}`);
+                log('error', `LOGIN FAILED: ${loginStatus.error}`);
+                return false;
             }
             
-            log('info', 'Login completed');
-            return true;
         } catch (e) {
-            log('error', `Login failed: ${e.message}`);
+            log('error', `Login failed with exception: ${e.message}`);
             const screenshot = await takeScreenshot(this.page, 'error_login');
             if (screenshot) this.screenshots.push(screenshot);
             return false;
         }
     }
     
-    async handleSliderCaptcha() {
+    async solveCaptchaIfPresent() {
         try {
-            // Check if slider CAPTCHA is present
+            // Check if CAPTCHA exists
             const captchaCheck = await this.page.evaluate(() => {
-                // Look for slider CAPTCHA elements
-                const sliderTexts = ['Slide right', 'slide to verify', 'Drag to verify'];
-                const pageText = document.body.textContent || '';
+                const captchaDiv = document.querySelector('div[class*="captcha"]');
+                if (!captchaDiv) return { exists: false };
                 
-                for (const text of sliderTexts) {
-                    if (pageText.toLowerCase().includes(text.toLowerCase())) {
-                        return { hasCaptcha: true, type: 'slider' };
-                    }
-                }
+                // Check if it's visible
+                const isVisible = captchaDiv.offsetParent !== null;
+                if (!isVisible) return { exists: false };
                 
-                // Look for slider element
-                const sliderElements = document.querySelectorAll('[class*="slider"], [class*="captcha"], [class*="verify"]');
-                if (sliderElements.length > 0) {
-                    return { hasCaptcha: true, type: 'slider' };
-                }
+                // Find the slider handle
+                const sliderHandle = captchaDiv.querySelector('div[draggable], [class*="slider"] button, [class*="drag"]');
                 
-                return { hasCaptcha: false };
+                return { 
+                    exists: true, 
+                    hasSlider: !!sliderHandle,
+                    captchaRect: captchaDiv.getBoundingClientRect()
+                };
             });
             
-            if (!captchaCheck.hasCaptcha) {
-                log('info', 'No slider CAPTCHA detected');
+            if (!captchaCheck.exists) {
+                log('info', 'No CAPTCHA detected');
+                return 'none';
+            }
+            
+            log('info', 'CAPTCHA detected! Attempting to solve...');
+            
+            const screenshot = await takeScreenshot(this.page, '05a_captcha_detected');
+            if (screenshot) this.screenshots.push(screenshot);
+            
+            if (captchaCheck.hasSlider) {
+                // Solve slider CAPTCHA
+                log('info', 'Solving slider CAPTCHA...');
+                
+                // Find the slider element and drag it
+                const sliderHandle = await this.page.$('div[class*="captcha"] div[draggable], div[class*="slider"] button, [class*="drag"]');
+                
+                if (sliderHandle) {
+                    const box = await sliderHandle.boundingBox();
+                    if (box) {
+                        // Start position (center of handle)
+                        const startX = box.x + box.width / 2;
+                        const startY = box.y + box.height / 2;
+                        
+                        // Move to start position
+                        await this.page.mouse.move(startX, startY);
+                        await humanDelay(100, 200);
+                        
+                        // Press mouse down
+                        await this.page.mouse.down();
+                        await humanDelay(50, 100);
+                        
+                        // Drag slowly to the right (300-400px)
+                        const dragDistance = 300;
+                        const steps = 20;
+                        for (let i = 1; i <= steps; i++) {
+                            await this.page.mouse.move(
+                                startX + (dragDistance * i / steps),
+                                startY + (Math.random() * 4 - 2) // Small vertical jitter for human-like movement
+                            );
+                            await humanDelay(20, 40);
+                        }
+                        
+                        // Release mouse
+                        await this.page.mouse.up();
+                        
+                        log('info', 'Slider dragged');
+                        await humanDelay(1000, 2000);
+                        
+                        // Check if CAPTCHA is solved (container should disappear)
+                        const captchaStillExists = await this.page.evaluate(() => {
+                            const captchaDiv = document.querySelector('div[class*="captcha"]');
+                            return captchaDiv && captchaDiv.offsetParent !== null;
+                        });
+                        
+                        if (!captchaStillExists) {
+                            log('info', 'CAPTCHA solved successfully!');
+                            return 'solved';
+                        } else {
+                            log('warning', 'CAPTCHA still present after slider drag');
+                            return 'unsolved';
+                        }
+                    }
+                }
+            }
+            
+            // If we can't solve it automatically
+            log('warning', 'Could not solve CAPTCHA automatically');
+            return 'unsolved';
+            
+        } catch (e) {
+            log('error', `Error checking/solving CAPTCHA: ${e.message}`);
+            return 'error';
+        }
+    }
+    
+    async clickLoginButtonWithMouseEvents() {
+        try {
+            // Find the login button
+            const buttonSelectors = [
+                'button[data-testid="login-btn"]',
+                'button[class*="login"]',
+                'button:not([disabled])'
+            ];
+            
+            let buttonBox = null;
+            
+            for (const selector of buttonSelectors) {
+                const buttons = await this.page.$$(selector);
+                for (const btn of buttons) {
+                    const text = await btn.evaluate(el => el.textContent || '');
+                    if (text.trim().toLowerCase() === 'login') {
+                        buttonBox = await btn.boundingBox();
+                        if (buttonBox) {
+                            log('info', `Found Login button with selector: ${selector}`);
+                            break;
+                        }
+                    }
+                }
+                if (buttonBox) break;
+            }
+            
+            if (!buttonBox) {
+                // Fallback: find by evaluating page
+                const buttonInfo = await this.page.evaluate(() => {
+                    const buttons = document.querySelectorAll('button');
+                    for (const btn of buttons) {
+                        const text = (btn.textContent || '').trim().toLowerCase();
+                        if (text === 'login' && !btn.disabled) {
+                            const rect = btn.getBoundingClientRect();
+                            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                        }
+                    }
+                    return null;
+                });
+                
+                if (buttonInfo) {
+                    buttonBox = buttonInfo;
+                    log('info', 'Found Login button via page.evaluate');
+                }
+            }
+            
+            if (!buttonBox) {
+                log('error', 'Could not find Login button');
                 return false;
             }
             
-            log('info', 'Slider CAPTCHA detected! Attempting to solve...');
+            // Calculate center of button
+            const centerX = buttonBox.x + buttonBox.width / 2;
+            const centerY = buttonBox.y + buttonBox.height / 2;
             
-            // Take screenshot of CAPTCHA
-            const screenshot = await takeScreenshot(this.page, '06a_slider_captcha');
-            if (screenshot) this.screenshots.push(screenshot);
+            log('info', `Clicking Login button at (${centerX}, ${centerY}) with mouse events...`);
             
-            // Try to solve the slider CAPTCHA manually (drag from left to right)
-            const solved = await this.page.evaluate(() => {
-                // Find the slider handle/button
-                const sliderHandles = document.querySelectorAll('[class*="slider"] button, [class*="slider"] [role="slider"], [class*="slider"] .handle, [class*="drag"], [class*="btn-slide"]');
-                
-                if (sliderHandles.length === 0) {
-                    return { solved: false, error: 'No slider handle found' };
-                }
-                
-                const handle = sliderHandles[0];
-                const rect = handle.getBoundingClientRect();
-                
-                // Simulate drag from left to right
-                const startX = rect.left + rect.width / 2;
-                const startY = rect.top + rect.height / 2;
-                const endX = startX + 300; // Drag 300px to the right
-                
-                // Create and dispatch mouse events
-                const mouseDown = new MouseEvent('mousedown', {
-                    bubbles: true,
-                    cancelable: true,
-                    clientX: startX,
-                    clientY: startY
-                });
-                
-                const mouseMove = new MouseEvent('mousemove', {
-                    bubbles: true,
-                    cancelable: true,
-                    clientX: endX,
-                    clientY: startY
-                });
-                
-                const mouseUp = new MouseEvent('mouseup', {
-                    bubbles: true,
-                    cancelable: true,
-                    clientX: endX,
-                    clientY: startY
-                });
-                
-                handle.dispatchEvent(mouseDown);
-                handle.dispatchEvent(mouseMove);
-                handle.dispatchEvent(mouseUp);
-                
-                return { solved: true, method: 'mouse events' };
-            });
+            // MANDATORY CLICK SEQUENCE:
+            // 1. mousemove to center of button
+            await this.page.mouse.move(centerX, centerY);
+            await humanDelay(50, 100);
             
-            if (solved.solved) {
-                log('info', `Slider CAPTCHA solved using: ${solved.method}`);
-            } else {
-                log('warning', `Could not solve slider CAPTCHA: ${solved.error}`);
-                
-                // Try using Puppeteer's mouse to drag
-                try {
-                    const sliderHandle = await this.page.$('[class*="slider"] button, [class*="drag"], [class*="slider"] .handle');
-                    if (sliderHandle) {
-                        const box = await sliderHandle.boundingBox();
-                        if (box) {
-                            // Perform drag
-                            await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-                            await this.page.mouse.down();
-                            await humanDelay(100, 200);
-                            
-                            // Drag slowly to the right
-                            for (let i = 0; i < 10; i++) {
-                                await this.page.mouse.move(
-                                    box.x + box.width / 2 + (i + 1) * 30,
-                                    box.y + box.height / 2
-                                );
-                                await humanDelay(30, 50);
-                            }
-                            
-                            await this.page.mouse.up();
-                            log('info', 'Slider dragged using Puppeteer mouse');
-                        }
-                    }
-                } catch (e) {
-                    log('error', `Failed to drag slider: ${e.message}`);
-                }
-            }
+            // 2. mousedown
+            await this.page.mouse.down();
+            await humanDelay(30, 60);
             
-            await humanDelay(1000, 2000);
+            // 3. mouseup
+            await this.page.mouse.up();
+            await humanDelay(30, 60);
+            
+            // 4. click
+            await this.page.mouse.click(centerX, centerY);
+            
+            log('info', 'Login button clicked with mouse event sequence');
             return true;
+            
         } catch (e) {
-            log('error', `Error handling slider CAPTCHA: ${e.message}`);
+            log('error', `Error clicking login button: ${e.message}`);
             return false;
         }
     }
