@@ -865,113 +865,35 @@ class GarenaAutomation {
     
     async enterSecurityPINAndConfirm() {
         try {
-            log('info', 'Looking for Security PIN or confirmation page...');
+            log('info', 'Checking for checkout/payment confirmation page...');
             
-            let screenshot = await takeScreenshot(this.page, '19_before_pin');
+            let screenshot = await takeScreenshot(this.page, '19_checkout_page');
             if (screenshot) this.screenshots.push(screenshot);
             
             const currentUrl = this.page.url();
             log('info', `Current URL: ${currentUrl}`);
             
-            // Check if we're on a page with PIN input
+            // Check page content
             const pageContent = await this.page.content();
             
-            // Look for PIN input field
-            let pinFound = false;
-            
-            // Method 1: Look for Security PIN text
-            if (pageContent.toLowerCase().includes('security pin') || pageContent.toLowerCase().includes('pin')) {
-                log('info', 'PIN-related content found on page');
-                
-                try {
-                    await this.page.waitForSelector('text/Security PIN', { timeout: 5000 });
-                    pinFound = true;
-                } catch (e) {
-                    // Try waiting for any password input
-                    try {
-                        await this.page.waitForSelector('input[type="password"]', { timeout: 5000 });
-                        pinFound = true;
-                    } catch (e2) {
-                        log('info', 'No PIN input found directly');
-                    }
-                }
-            }
-            
-            if (!pinFound) {
-                // Check if we're still on the main page (not progressed)
-                if (pageContent.includes('Official Top Up Center') || pageContent.includes('game selection')) {
-                    log('warning', 'Still on main top-up page, payment flow not initiated');
-                    screenshot = await takeScreenshot(this.page, '19_still_on_main_page');
-                    if (screenshot) this.screenshots.push(screenshot);
-                    return false; // Indicate failure to proceed
-                }
-                
-                log('info', 'No PIN page found, transaction may have completed or different flow');
-                screenshot = await takeScreenshot(this.page, '19_no_pin_page');
-                if (screenshot) this.screenshots.push(screenshot);
-                return true; // Continue to verification
-            }
-            
-            await humanDelay();
-            
-            const pin = CONFIG.GARENA_PIN; // "121212"
-            
-            // Try to find PIN input boxes
-            const pinBoxes = await this.page.$$('input[type="password"]');
-            
-            if (pinBoxes.length >= 6) {
-                // Separate boxes for each digit
-                log('info', 'Entering PIN in separate boxes...');
-                for (let i = 0; i < pin.length; i++) {
-                    await pinBoxes[i].click();
-                    await humanDelay(50, 100);
-                    await pinBoxes[i].type(pin[i]);
-                }
-            } else if (pinBoxes.length > 0) {
-                // Single input field
-                log('info', 'Entering PIN in single field...');
-                await pinBoxes[0].click();
-                await humanDelay(100, 200);
-                await this.page.type('input[type="password"]', pin, { delay: randomDelay(20, 50) });
-                log('info', 'PIN entered');
-            } else {
-                // Try other selectors
-                const pinSelectors = [
-                    'input[placeholder*="PIN" i]',
-                    'input[name*="pin" i]'
-                ];
-                
-                for (const selector of pinSelectors) {
-                    try {
-                        await this.page.waitForSelector(selector, { timeout: 3000 });
-                        await this.page.click(selector);
-                        await humanDelay(100, 200);
-                        await this.page.type(selector, pin, { delay: randomDelay(20, 50) });
-                        log('info', `PIN entered using: ${selector}`);
-                        break;
-                    } catch (e) {
-                        continue;
-                    }
-                }
-            }
-            
-            screenshot = await takeScreenshot(this.page, '20_pin_entered');
-            if (screenshot) this.screenshots.push(screenshot);
-            
-            await humanDelay();
-            
-            // Click CONFIRM
-            const confirmSelectors = [
-                'button:has-text("CONFIRM")',
+            // Look for checkout/confirm/pay button
+            const checkoutSelectors = [
+                'button[type="submit"]',
+                'button:has-text("Pay")',
                 'button:has-text("Confirm")',
-                'button[type="submit"]'
+                'button:has-text("Complete")',
+                'button:has-text("Checkout")'
             ];
             
-            for (const selector of confirmSelectors) {
+            // Try to find and click checkout button
+            for (const selector of checkoutSelectors) {
                 try {
-                    await this.page.click(selector, { timeout: 3000 });
-                    log('info', `Clicked CONFIRM using: ${selector}`);
-                    break;
+                    const btn = await this.page.$(selector);
+                    if (btn) {
+                        await btn.click();
+                        log('info', `Clicked checkout button: ${selector}`);
+                        break;
+                    }
                 } catch (e) {
                     continue;
                 }
@@ -982,21 +904,22 @@ class GarenaAutomation {
                 const buttons = document.querySelectorAll('button, input[type="submit"]');
                 for (const btn of buttons) {
                     const text = (btn.textContent || btn.value || '').toLowerCase();
-                    if (text.includes('confirm') || text.includes('submit') || text.includes('pay')) {
+                    if (text.includes('pay') || text.includes('confirm') || text.includes('complete') || text.includes('checkout')) {
                         btn.click();
                         return;
                     }
                 }
             });
             
-            await humanDelay(3000, 5000);
-            screenshot = await takeScreenshot(this.page, '21_after_confirm');
+            await humanDelay(5000, 8000);
+            
+            screenshot = await takeScreenshot(this.page, '20_after_checkout');
             if (screenshot) this.screenshots.push(screenshot);
             
             return true;
         } catch (e) {
-            log('error', `Failed to enter PIN: ${e.message}`);
-            const screenshot = await takeScreenshot(this.page, 'error_pin');
+            log('error', `Failed at checkout: ${e.message}`);
+            const screenshot = await takeScreenshot(this.page, 'error_checkout');
             if (screenshot) this.screenshots.push(screenshot);
             return false;
         }
