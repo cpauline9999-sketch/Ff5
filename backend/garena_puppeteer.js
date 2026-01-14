@@ -937,16 +937,16 @@ class GarenaAutomation {
             
             // Attempt 3: Smart fallback positions based on typical slider locations
             // The Garena slider typically appears in a modal centered on screen
-            // Based on analysis, handle is around X=450-550, Y=490-520
+            // Based on image analysis, handle is around X=450-460, Y=510-520
             log('info', 'API method failed. Trying smart fallback positions...');
             
             const viewport = this.page.viewport();
             const viewportWidth = viewport?.width || 1920;
             const viewportHeight = viewport?.height || 1080;
             
-            // Position 1: Estimated slider handle position (left side of center modal)
-            const smartX1 = 453;  // Based on image analysis
-            const smartY1 = 500;
+            // Position 1: Most accurate estimated position (X=455, Y=511-515)
+            const smartX1 = 455;
+            const smartY1 = 512;
             
             log('info', `Trying smart position 1: (${smartX1}, ${smartY1})`);
             let smartResult = await this.performSliderDrag(smartX1, smartY1, 280);
@@ -956,9 +956,9 @@ class GarenaAutomation {
             
             await humanDelay(1000, 1500);
             
-            // Position 2: Slightly adjusted (modal might shift)
-            const smartX2 = 520;
-            const smartY2 = 505;
+            // Position 2: Slightly different Y (modal might shift)
+            const smartX2 = 455;
+            const smartY2 = 500;
             
             log('info', `Trying smart position 2: (${smartX2}, ${smartY2})`);
             smartResult = await this.performSliderDrag(smartX2, smartY2, 280);
@@ -968,12 +968,24 @@ class GarenaAutomation {
             
             await humanDelay(1000, 1500);
             
-            // Position 3: Alternative position (different modal placement)
-            const smartX3 = 480;
-            const smartY3 = 495;
+            // Position 3: Alternative position (slightly right)
+            const smartX3 = 465;
+            const smartY3 = 515;
             
             log('info', `Trying smart position 3: (${smartX3}, ${smartY3})`);
-            smartResult = await this.performSliderDrag(smartX3, smartY3, 300);
+            smartResult = await this.performSliderDrag(smartX3, smartY3, 280);
+            if (smartResult === 'solved') {
+                return 'solved';
+            }
+            
+            await humanDelay(1000, 1500);
+            
+            // Position 4: Even more variation
+            const smartX4 = 450;
+            const smartY4 = 508;
+            
+            log('info', `Trying smart position 4: (${smartX4}, ${smartY4})`);
+            smartResult = await this.performSliderDrag(smartX4, smartY4, 290);
             if (smartResult === 'solved') {
                 return 'solved';
             }
