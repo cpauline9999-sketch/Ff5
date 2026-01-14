@@ -114,20 +114,20 @@ class GarenaAutomation {
     
     async connectBrowser() {
         try {
-            log('info', 'Connecting to BrowserCloud.io...');
+            log('info', 'Connecting to Browserless (joycegames.vip)...');
             
             this.browser = await puppeteer.connect({
-                browserWSEndpoint: CONFIG.BROWSERCLOUD_URL,
+                browserWSEndpoint: CONFIG.BROWSERLESS_URL,
                 defaultViewport: { width: 1920, height: 1080 }
             });
             
             this.page = await this.browser.newPage();
             await this.page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
             
-            log('info', 'BrowserCloud.io connected successfully (15 min session)');
+            log('info', 'Browserless connected successfully');
             return true;
         } catch (e) {
-            log('error', `Failed to connect to BrowserCloud.io: ${e.message}`);
+            log('error', `Failed to connect to Browserless: ${e.message}`);
             return false;
         }
     }
