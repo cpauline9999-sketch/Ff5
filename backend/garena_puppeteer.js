@@ -11,9 +11,9 @@ const path = require('path');
 
 // ===== CONFIGURATION =====
 const CONFIG = {
-    // BrowserCloud.io Configuration
-    BROWSERCLOUD_TOKEN: 'CIAQ4UYVDLOT6fgC',
-    BROWSERCLOUD_URL: 'wss://chrome-v2.browsercloud.io/?token=CIAQ4UYVDLOT6fgC&proxy=datacenter&proxyCountry=US',
+    // Browserless Configuration (joycegames.vip)
+    BROWSERLESS_TOKEN: 'browserlessTOKEN2026',
+    BROWSERLESS_URL: 'wss://browserless.joycegames.vip?token=browserlessTOKEN2026',
     
     // SolveCaptcha Configuration
     SOLVECAPTCHA_API_KEY: 'a19f74499d6680dcd821a74c9a5d079e',
