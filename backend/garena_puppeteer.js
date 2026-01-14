@@ -428,7 +428,7 @@ class GarenaAutomation {
     
     async selectWalletPayment() {
         try {
-            log('info', 'Looking for payment section and clicking to initiate purchase...');
+            log('info', 'Looking for UniPin payment Login button that redirects to unipin.com...');
             
             await humanDelay(1000, 1500);
             
@@ -450,7 +450,7 @@ class GarenaAutomation {
                 log('warning', 'Could not get current URL');
             }
             
-            // Set up listener for new pages/popups BEFORE clicking
+            // Set up listener for new pages/popups or navigation BEFORE clicking
             const pagePromise = new Promise(resolve => {
                 const handler = async target => {
                     if (target.type() === 'page') {
@@ -469,14 +469,25 @@ class GarenaAutomation {
                 }, 15000);
             });
             
-            // Strategy: Try different payment sections to find one that goes to Garena SSO
-            log('info', 'Clicking Login button under Boost section (for wallet payment)...');
+            // Look for UniPin Login link/button that redirects to unipin.com
+            log('info', 'Looking for UniPin Login link that goes to unipin.com...');
             
             try {
+                // First, try to find a direct link to unipin.com/login
                 const clickResult = await this.page.evaluate(() => {
-                    // Find all Login buttons
-                    const loginElements = [];
+                    // Strategy 1: Find direct UniPin login link
+                    const unipinLinks = document.querySelectorAll('a[href*="unipin.com"], a[href*="unipin"]');
+                    for (const link of unipinLinks) {
+                        const href = link.href || '';
+                        if (href.includes('login') || href.includes('unipin')) {
+                            link.click();
+                            return { clicked: true, method: 'direct unipin link', href: href };
+                        }
+                    }
+                    
+                    // Strategy 2: Find Login buttons in UniPin section
                     const allElements = document.querySelectorAll('button, a, div[role="button"], span');
+                    const loginElements = [];
                     
                     for (const el of allElements) {
                         const text = (el.textContent || el.innerText || '').trim();
@@ -487,34 +498,26 @@ class GarenaAutomation {
                                 loginElements.push({
                                     element: el,
                                     section: sectionText.substring(0, 100),
-                                    isBoost: sectionText.includes('Boost'),
-                                    isUniPin: sectionText.includes('UniPin')
+                                    isUniPin: sectionText.includes('UniPin'),
+                                    href: el.href || el.getAttribute('href') || ''
                                 });
                             }
                         }
                     }
                     
-                    // Prioritize Boost wallet login (for UP Points / wallet payment)
+                    // Prioritize UniPin login with href to unipin.com
                     for (const item of loginElements) {
-                        if (item.isBoost) {
+                        if (item.isUniPin && item.href.includes('unipin')) {
                             item.element.click();
-                            return { clicked: true, section: 'Boost' };
+                            return { clicked: true, method: 'unipin section with href', href: item.href };
                         }
                     }
                     
-                    // Fallback to UniPin
+                    // Fallback: Click UniPin section login
                     for (const item of loginElements) {
                         if (item.isUniPin) {
                             item.element.click();
-                            return { clicked: true, section: 'UniPin' };
-                        }
-                    }
-                    
-                    // Fallback to any login button that's not the player ID one
-                    for (const item of loginElements) {
-                        if (!item.section.includes('player ID') && !item.section.includes('Or login with your game account')) {
-                            item.element.click();
-                            return { clicked: true, section: item.section.substring(0, 50) };
+                            return { clicked: true, method: 'unipin section login', section: item.section.substring(0, 50) };
                         }
                     }
                     
@@ -522,139 +525,18 @@ class GarenaAutomation {
                 });
                 
                 if (clickResult.clicked) {
-                    log('info', `Clicked in section: ${clickResult.section}`);
+                    log('info', `Clicked: ${clickResult.method} ${clickResult.href || clickResult.section || ''}`);
                 } else {
-                    log('warning', 'Could not find appropriate Login button');
+                    log('warning', 'Could not find UniPin Login link');
                 }
             } catch (e) {
-                log('error', `Error clicking Login: ${e.message}`);
+                log('error', `Error clicking UniPin Login: ${e.message}`);
             }
             
-            // Wait for navigation or modal
-            log('info', 'Waiting for navigation or modal...');
-            await humanDelay(3000, 5000);
+            // Wait for navigation or new page (UniPin login page)
+            log('info', 'Waiting for navigation to UniPin login page...');
             
-            // Check if a Free Fire login modal appeared (which is wrong - we need Garena SSO)
-            const modalCheck = await this.page.evaluate(() => {
-                // Look for modal close button or modal overlay
-                const closeButtons = document.querySelectorAll('button[aria-label="Close"], .close, .modal-close, [data-dismiss="modal"]');
-                const modalOverlay = document.querySelector('.modal, .overlay, [role="dialog"]');
-                
-                // Check if modal contains "Free Fire" login
-                if (modalOverlay) {
-                    const modalText = modalOverlay.textContent || '';
-                    if (modalText.includes('Player ID') && modalText.includes('Free Fire')) {
-                        // This is the wrong modal - we need to close it or interact differently
-                        return { hasModal: true, type: 'freefire_login' };
-                    }
-                }
-                
-                return { hasModal: false };
-            });
-            
-            if (modalCheck.hasModal && modalCheck.type === 'freefire_login') {
-                log('info', 'Free Fire login modal appeared - need to re-authenticate');
-                
-                // Take a screenshot of the modal
-                screenshot = await takeScreenshot(this.page, '12c_modal_appeared');
-                if (screenshot) this.screenshots.push(screenshot);
-                
-                // The modal is asking for Player ID again - we need to fill it and click Login
-                log('info', 'Filling Player ID in the payment authentication modal...');
-                
-                try {
-                    // Look for Player ID input in the modal
-                    const modalInputSelectors = [
-                        'input[placeholder*="player ID" i]',
-                        'input[placeholder*="Player ID" i]',
-                        'input[name*="player" i]',
-                        'input[type="text"]'
-                    ];
-                    
-                    let filled = false;
-                    for (const selector of modalInputSelectors) {
-                        try {
-                            const inputs = await this.page.$$(selector);
-                            for (const input of inputs) {
-                                // Check if this input is visible (in the modal)
-                                const isVisible = await input.isIntersectingViewport();
-                                if (isVisible) {
-                                    await input.click();
-                                    await humanDelay(100, 200);
-                                    // Clear any existing value
-                                    await input.evaluate(el => el.value = '');
-                                    await input.type(CONFIG.TEST_PLAYER_UID, { delay: randomDelay(20, 50) });
-                                    log('info', `Filled Player ID in modal using: ${selector}`);
-                                    filled = true;
-                                    break;
-                                }
-                            }
-                            if (filled) break;
-                        } catch (e) {
-                            continue;
-                        }
-                    }
-                    
-                    if (!filled) {
-                        // Try using page.evaluate to find the modal's input
-                        await this.page.evaluate((playerId) => {
-                            // Find the modal
-                            const modal = document.querySelector('.modal, [role="dialog"], .overlay');
-                            if (modal) {
-                                const input = modal.querySelector('input[type="text"], input[placeholder*="player" i]');
-                                if (input) {
-                                    input.value = playerId;
-                                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                                }
-                            }
-                        }, this.playerUid);
-                        log('info', 'Filled Player ID using page.evaluate');
-                    }
-                    
-                    await humanDelay(500, 1000);
-                    screenshot = await takeScreenshot(this.page, '12d_modal_player_id_filled');
-                    if (screenshot) this.screenshots.push(screenshot);
-                    
-                    // Now click the Login button in the modal
-                    const loginClicked = await this.page.evaluate(() => {
-                        // Find Login button in the modal
-                        const modal = document.querySelector('.modal, [role="dialog"], .overlay') || document;
-                        const buttons = modal.querySelectorAll('button, a');
-                        
-                        for (const btn of buttons) {
-                            const text = (btn.textContent || '').trim().toLowerCase();
-                            if (text === 'login') {
-                                btn.click();
-                                return { clicked: true };
-                            }
-                        }
-                        
-                        // Also try clicking any submit button
-                        const submitBtn = modal.querySelector('button[type="submit"]');
-                        if (submitBtn) {
-                            submitBtn.click();
-                            return { clicked: true };
-                        }
-                        
-                        return { clicked: false };
-                    });
-                    
-                    if (loginClicked.clicked) {
-                        log('info', 'Clicked Login button in modal');
-                    } else {
-                        log('warning', 'Could not find Login button in modal');
-                    }
-                    
-                    await humanDelay(3000, 5000);
-                    screenshot = await takeScreenshot(this.page, '12e_after_modal_login');
-                    if (screenshot) this.screenshots.push(screenshot);
-                    
-                } catch (e) {
-                    log('error', `Error interacting with modal: ${e.message}`);
-                }
-            }
-            
-            // Wait for new page
+            // First wait for potential new page
             const newPage = await pagePromise;
             
             if (newPage) {
@@ -665,53 +547,127 @@ class GarenaAutomation {
                     await humanDelay(3000, 5000);
                     const newUrl = this.page.url();
                     log('info', `New page URL: ${newUrl}`);
+                    
+                    // Check if we're on UniPin login page
+                    if (newUrl.includes('unipin.com')) {
+                        log('info', 'Successfully navigated to UniPin login page!');
+                        screenshot = await takeScreenshot(this.page, '13_unipin_login_page');
+                        if (screenshot) this.screenshots.push(screenshot);
+                        return true;
+                    }
                 } catch (e) {
                     log('warning', `Error setting up new page: ${e.message}`);
                 }
-            } else {
-                // No new page - check current page state
-                await humanDelay(3000, 5000);
-                
-                try {
-                    // Check all pages
-                    const pages = await this.browser.pages();
-                    log('info', `Total browser pages: ${pages.length}`);
-                    
-                    for (let i = pages.length - 1; i >= 0; i--) {
-                        try {
-                            const pageUrl = pages[i].url();
-                            log('info', `Page ${i} URL: ${pageUrl}`);
-                            
-                            // Look for SSO/login page
-                            if (pageUrl.includes('sso') || pageUrl.includes('login') || pageUrl.includes('account')) {
-                                this.page = pages[i];
-                                log('info', `Found auth page at index ${i}`);
-                                break;
-                            }
-                        } catch (e) {
-                            log('warning', `Page ${i} may be closed: ${e.message}`);
-                        }
-                    }
-                    
-                    currentUrl = this.page.url();
-                    log('info', `Current page URL after wait: ${currentUrl}`);
-                } catch (e) {
-                    log('error', `Error checking pages: ${e.message}`);
-                }
             }
             
-            // Take final screenshot
+            // Check if current page navigated to UniPin
+            await humanDelay(3000, 5000);
+            
             try {
-                screenshot = await takeScreenshot(this.page, '13_after_payment_login');
+                currentUrl = this.page.url();
+                log('info', `Current URL after wait: ${currentUrl}`);
+                
+                if (currentUrl.includes('unipin.com')) {
+                    log('info', 'Page navigated to UniPin login!');
+                    screenshot = await takeScreenshot(this.page, '13_unipin_login_page');
+                    if (screenshot) this.screenshots.push(screenshot);
+                    return true;
+                }
+                
+                // Check all pages for UniPin
+                const pages = await this.browser.pages();
+                log('info', `Total browser pages: ${pages.length}`);
+                
+                for (let i = pages.length - 1; i >= 0; i--) {
+                    try {
+                        const pageUrl = pages[i].url();
+                        log('info', `Page ${i} URL: ${pageUrl}`);
+                        
+                        if (pageUrl.includes('unipin.com')) {
+                            this.page = pages[i];
+                            log('info', `Found UniPin page at index ${i}`);
+                            screenshot = await takeScreenshot(this.page, '13_unipin_login_page');
+                            if (screenshot) this.screenshots.push(screenshot);
+                            return true;
+                        }
+                    } catch (e) {
+                        log('warning', `Page ${i} error: ${e.message}`);
+                    }
+                }
+                
+                // If still on shop.garena.my, check if modal appeared
+                if (currentUrl.includes('shop.garena.my')) {
+                    log('warning', 'Still on Garena shop - UniPin redirect may have failed');
+                    
+                    // Check for Free Fire modal (session reset indicator)
+                    const hasModal = await this.page.evaluate(() => {
+                        const modal = document.querySelector('.modal, [role="dialog"]');
+                        if (modal) {
+                            const text = modal.textContent || '';
+                            return text.includes('Player ID') && text.includes('Free Fire');
+                        }
+                        return false;
+                    });
+                    
+                    if (hasModal) {
+                        log('warning', 'Free Fire modal appeared - this means session reset, need to re-login');
+                        // Handle re-login if needed
+                        await this.handleModalReLogin();
+                    }
+                }
+                
+                screenshot = await takeScreenshot(this.page, '13_after_payment_attempt');
                 if (screenshot) this.screenshots.push(screenshot);
+                
             } catch (e) {
-                log('warning', `Screenshot error: ${e.message}`);
+                log('error', `Error checking pages: ${e.message}`);
             }
             
             return true;
         } catch (e) {
-            log('error', `Failed to select wallet/payment: ${e.message}`);
+            log('error', `Failed to select payment: ${e.message}`);
             return true;
+        }
+    }
+    
+    async handleModalReLogin() {
+        try {
+            log('info', 'Handling modal re-login (session reset)...');
+            
+            // Fill Player ID in modal
+            const filled = await this.page.evaluate((playerId) => {
+                const modal = document.querySelector('.modal, [role="dialog"]');
+                if (modal) {
+                    const input = modal.querySelector('input[type="text"], input[placeholder*="player" i]');
+                    if (input) {
+                        input.value = playerId;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        return true;
+                    }
+                }
+                return false;
+            }, this.playerUid);
+            
+            if (filled) {
+                log('info', 'Filled Player ID in modal');
+                await humanDelay(500, 1000);
+                
+                // Click Login in modal
+                await this.page.evaluate(() => {
+                    const modal = document.querySelector('.modal, [role="dialog"]') || document;
+                    const buttons = modal.querySelectorAll('button, a');
+                    for (const btn of buttons) {
+                        if ((btn.textContent || '').trim().toLowerCase() === 'login') {
+                            btn.click();
+                            return;
+                        }
+                    }
+                });
+                
+                await humanDelay(3000, 5000);
+            }
+        } catch (e) {
+            log('error', `Error in modal re-login: ${e.message}`);
         }
     }
     
