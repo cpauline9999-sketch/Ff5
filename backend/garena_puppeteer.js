@@ -573,6 +573,9 @@ class GarenaAutomation {
             screenshot = await takeScreenshot(this.page, '07a_slider_detected');
             if (screenshot) this.screenshots.push(screenshot);
             
+            // IMPORTANT: Even if CAPTCHA is detected in iframe, we need to find the actual 
+            // visual position on the main page for mouse operations
+            
             // Get iframe offset if CAPTCHA is in iframe
             let frameOffset = { x: 0, y: 0 };
             if (iframeElement) {
@@ -583,65 +586,164 @@ class GarenaAutomation {
                 }
             }
             
-            // Try to find slider handle in the frame first
+            // STRATEGY: Find slider handle in multiple ways
             let handleRect = captchaCheck.handleRect;
+            let sliderContainer = null;
             
+            // Step 1: Try to find the slider handle using ElementHandle and boundingBox on MAIN page
+            // This gives us absolute coordinates for mouse operations
+            log('info', 'Searching for slider handle using Puppeteer ElementHandle...');
+            
+            const sliderHandleSelectors = [
+                'span.nc_iconfont',
+                'span[class*="nc_iconfont"]',
+                '.nc_iconfont',
+                'span.btn_slide',
+                '[class*="slider"] span:first-child',
+                'div[class*="nc_"] > span',
+                'span.nc_bg',
+                '.nc_wrapper span'
+            ];
+            
+            for (const selector of sliderHandleSelectors) {
+                try {
+                    // Try main page first
+                    let handle = await this.page.$(selector);
+                    if (handle) {
+                        const bbox = await handle.boundingBox();
+                        if (bbox && bbox.width > 5 && bbox.height > 5) {
+                            handleRect = { 
+                                x: bbox.x, 
+                                y: bbox.y, 
+                                width: bbox.width, 
+                                height: bbox.height,
+                                selector: selector,
+                                source: 'main-page-element'
+                            };
+                            log('info', `Found handle via main page: ${selector} at (${bbox.x}, ${bbox.y})`);
+                            break;
+                        }
+                    }
+                    
+                    // Try iframe if exists
+                    if (captchaFrame !== this.page) {
+                        handle = await captchaFrame.$(selector);
+                        if (handle) {
+                            const bbox = await handle.boundingBox();
+                            if (bbox && bbox.width > 5 && bbox.height > 5) {
+                                // Adjust for iframe offset
+                                handleRect = { 
+                                    x: bbox.x + frameOffset.x, 
+                                    y: bbox.y + frameOffset.y, 
+                                    width: bbox.width, 
+                                    height: bbox.height,
+                                    selector: selector,
+                                    source: 'iframe-element'
+                                };
+                                log('info', `Found handle via iframe: ${selector} at (${handleRect.x}, ${handleRect.y})`);
+                                break;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // Continue to next selector
+                }
+            }
+            
+            // Step 2: If still not found, try using evaluate to get coordinates
             if (!handleRect || handleRect.width === 0) {
-                log('info', 'Looking for slider handle in frame...');
+                log('info', 'ElementHandle method failed, trying evaluate method...');
                 
-                handleRect = await captchaFrame.evaluate(() => {
-                    const handleSelectors = [
+                // Try finding in the frame using evaluate
+                const evalRect = await captchaFrame.evaluate(() => {
+                    const selectors = [
                         'span[class*="nc_iconfont"]',
-                        'span[class*="btn_slide"]',
+                        '.nc_iconfont',
+                        'span.btn_slide',
                         'span[class*="nc_"]',
-                        'div[class*="slider"] span',
-                        'button[class*="slider"]',
-                        '[class*="slide"] > span',
-                        'div[class*="_btn"]',
-                        'span[data-nc-lang]'
+                        '[class*="slider"] span'
                     ];
                     
-                    for (const sel of handleSelectors) {
-                        const handle = document.querySelector(sel);
-                        if (handle) {
-                            const rect = handle.getBoundingClientRect();
-                            if (rect.width > 5 && rect.height > 5) {
+                    for (const sel of selectors) {
+                        const elements = document.querySelectorAll(sel);
+                        for (const el of elements) {
+                            const rect = el.getBoundingClientRect();
+                            // Handle is usually 30-50px wide
+                            if (rect.width >= 20 && rect.width <= 70 && rect.height >= 20) {
                                 return { 
                                     x: rect.x, 
                                     y: rect.y, 
                                     width: rect.width, 
                                     height: rect.height,
-                                    selector: sel 
+                                    selector: sel,
+                                    className: el.className
                                 };
                             }
                         }
                     }
-                    
-                    // Fallback: look for elements with cursor pointer that are small (handle-like)
-                    const allElements = document.querySelectorAll('span, button, div');
-                    for (const el of allElements) {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width >= 20 && rect.width <= 60 && rect.height >= 20 && rect.height <= 60) {
-                            const style = window.getComputedStyle(el);
-                            if (style.cursor === 'pointer' || style.cursor === 'move') {
-                                return { 
-                                    x: rect.x, 
-                                    y: rect.y, 
-                                    width: rect.width, 
-                                    height: rect.height,
-                                    selector: 'fallback-pointer' 
-                                };
-                            }
-                        }
-                    }
-                    
                     return null;
                 });
                 
-                // Adjust for iframe offset
-                if (handleRect && frameOffset.x !== 0) {
-                    handleRect.x += frameOffset.x;
-                    handleRect.y += frameOffset.y;
+                if (evalRect) {
+                    // Add iframe offset
+                    handleRect = {
+                        ...evalRect,
+                        x: evalRect.x + frameOffset.x,
+                        y: evalRect.y + frameOffset.y,
+                        source: 'evaluate'
+                    };
+                    log('info', `Found handle via evaluate: ${evalRect.selector} at (${handleRect.x}, ${handleRect.y}), class: ${evalRect.className}`);
+                }
+            }
+            
+            // Step 3: Try to find the slider container/track to help with coordinates
+            log('info', 'Looking for slider container/track...');
+            const containerInfo = await this.page.evaluate(() => {
+                // Find the CAPTCHA container
+                const containerSelectors = [
+                    '#nc_1_wrapper',
+                    'div[class*="nc_wrapper"]',
+                    '.nc-container',
+                    'div[class*="slider-verify"]',
+                    'div[class*="captcha"]'
+                ];
+                
+                for (const sel of containerSelectors) {
+                    const container = document.querySelector(sel);
+                    if (container) {
+                        const rect = container.getBoundingClientRect();
+                        if (rect.width > 100 && rect.height > 20) {
+                            // Also find the track within
+                            const track = container.querySelector('[class*="scale"], [class*="track"], [class*="_bg"]');
+                            const trackRect = track ? track.getBoundingClientRect() : null;
+                            
+                            return {
+                                container: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                                track: trackRect ? { x: trackRect.x, y: trackRect.y, width: trackRect.width, height: trackRect.height } : null,
+                                selector: sel
+                            };
+                        }
+                    }
+                }
+                return null;
+            });
+            
+            if (containerInfo) {
+                log('info', `Found slider container: ${containerInfo.selector}, rect: ${JSON.stringify(containerInfo.container)}`);
+                sliderContainer = containerInfo.container;
+                
+                // If we still don't have handle coordinates, estimate from container
+                if (!handleRect) {
+                    // Handle is typically at the left side of the container
+                    handleRect = {
+                        x: containerInfo.container.x + 10,
+                        y: containerInfo.container.y + containerInfo.container.height / 2 - 15,
+                        width: 30,
+                        height: 30,
+                        selector: 'estimated-from-container',
+                        source: 'estimated'
+                    };
+                    log('info', `Estimated handle position from container: (${handleRect.x}, ${handleRect.y})`);
                 }
             }
             
