@@ -550,34 +550,61 @@ class GarenaAutomation {
                 screenshot = await takeScreenshot(this.page, '12c_modal_appeared');
                 if (screenshot) this.screenshots.push(screenshot);
                 
-                // Try to close the modal by clicking outside or clicking close button
-                const modalClosed = await this.page.evaluate(() => {
-                    // Try clicking close button
-                    const closeBtn = document.querySelector('button[aria-label="Close"], .close, .modal-close, [data-dismiss="modal"], svg[class*="close"]');
-                    if (closeBtn) {
-                        closeBtn.click();
-                        return { closed: true, method: 'close button' };
-                    }
-                    
-                    // Try clicking modal overlay to close
-                    const overlay = document.querySelector('.modal-backdrop, .overlay');
-                    if (overlay) {
-                        overlay.click();
-                        return { closed: true, method: 'overlay click' };
-                    }
-                    
-                    return { closed: false };
+                // Try to close the modal by pressing Escape or clicking outside
+                log('info', 'Attempting to close modal...');
+                
+                // Method 1: Press Escape key
+                try {
+                    await this.page.keyboard.press('Escape');
+                    log('info', 'Pressed Escape key');
+                    await humanDelay(500, 1000);
+                } catch (e) {
+                    log('warning', `Could not press Escape: ${e.message}`);
+                }
+                
+                // Check if modal is still there
+                const stillHasModal = await this.page.evaluate(() => {
+                    const modalOverlay = document.querySelector('.modal, .overlay, [role="dialog"]');
+                    return !!modalOverlay;
                 });
                 
-                if (modalClosed.closed) {
-                    log('info', `Modal closed using: ${modalClosed.method}`);
-                    await humanDelay(1000, 2000);
-                } else {
-                    log('warning', 'Could not close modal, trying to interact with it');
-                    
-                    // If we can't close, maybe we need to login through it
-                    // The modal wants Player ID again
+                if (stillHasModal) {
+                    // Method 2: Click outside the modal (on the overlay/background)
+                    try {
+                        await this.page.evaluate(() => {
+                            // Click on the page body/backdrop
+                            const backdrop = document.querySelector('.modal-backdrop, .overlay-backdrop, body');
+                            if (backdrop) {
+                                backdrop.click();
+                            }
+                            // Also try clicking at specific coordinates (top-left corner)
+                            const event = new MouseEvent('click', {
+                                bubbles: true,
+                                cancelable: true,
+                                clientX: 10,
+                                clientY: 10
+                            });
+                            document.elementFromPoint(10, 10)?.dispatchEvent(event);
+                        });
+                        log('info', 'Clicked outside modal');
+                        await humanDelay(500, 1000);
+                    } catch (e) {
+                        log('warning', `Could not click outside modal: ${e.message}`);
+                    }
                 }
+                
+                // Method 3: Try clicking at coordinates outside the modal
+                try {
+                    await this.page.mouse.click(50, 50);
+                    log('info', 'Clicked at coordinates outside modal');
+                    await humanDelay(500, 1000);
+                } catch (e) {
+                    log('warning', `Could not click at coordinates: ${e.message}`);
+                }
+                
+                // Take screenshot after attempting to close
+                screenshot = await takeScreenshot(this.page, '12d_after_close_attempt');
+                if (screenshot) this.screenshots.push(screenshot);
             }
             
             // Wait for new page
