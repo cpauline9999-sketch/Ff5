@@ -469,8 +469,8 @@ class GarenaAutomation {
                 }, 15000);
             });
             
-            // Click the Login button under UniPin section
-            log('info', 'Clicking Login button under UniPin section...');
+            // Strategy: Try different payment sections to find one that goes to Garena SSO
+            log('info', 'Clicking Login button under Boost section (for wallet payment)...');
             
             try {
                 const clickResult = await this.page.evaluate(() => {
@@ -487,13 +487,22 @@ class GarenaAutomation {
                                 loginElements.push({
                                     element: el,
                                     section: sectionText.substring(0, 100),
+                                    isBoost: sectionText.includes('Boost'),
                                     isUniPin: sectionText.includes('UniPin')
                                 });
                             }
                         }
                     }
                     
-                    // Prioritize UniPin login
+                    // Prioritize Boost wallet login (for UP Points / wallet payment)
+                    for (const item of loginElements) {
+                        if (item.isBoost) {
+                            item.element.click();
+                            return { clicked: true, section: 'Boost' };
+                        }
+                    }
+                    
+                    // Fallback to UniPin
                     for (const item of loginElements) {
                         if (item.isUniPin) {
                             item.element.click();
