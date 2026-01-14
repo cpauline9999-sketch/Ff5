@@ -469,22 +469,18 @@ class GarenaAutomation {
                 }, 15000);
             });
             
-            // Strategy: The UniPin section has a "Login" button that should 
-            // trigger Garena SSO authentication
-            // Let's click on the Login button under UniPin
+            // Click the Login button under UniPin section
             log('info', 'Clicking Login button under UniPin section...');
             
             try {
-                // First, try clicking on a specific payment option that includes "Login"
                 const clickResult = await this.page.evaluate(() => {
-                    // Find all elements containing "Login"
+                    // Find all Login buttons
                     const loginElements = [];
                     const allElements = document.querySelectorAll('button, a, div[role="button"], span');
                     
                     for (const el of allElements) {
                         const text = (el.textContent || el.innerText || '').trim();
                         if (text.toLowerCase() === 'login') {
-                            // Check if it's in a UniPin or payment section
                             const section = el.closest('div');
                             if (section) {
                                 const sectionText = section.textContent || '';
@@ -506,19 +502,11 @@ class GarenaAutomation {
                     }
                     
                     // Fallback to any login button that's not the player ID one
-                    // The player ID login is usually at the top with "Or login with your game account" text
                     for (const item of loginElements) {
                         if (!item.section.includes('player ID') && !item.section.includes('Or login with your game account')) {
                             item.element.click();
                             return { clicked: true, section: item.section.substring(0, 50) };
                         }
-                    }
-                    
-                    // If we still haven't clicked, try clicking a payment method card/option
-                    const paymentOptions = document.querySelectorAll('[data-payment], .payment-option, .payment-method');
-                    if (paymentOptions.length > 0) {
-                        paymentOptions[0].click();
-                        return { clicked: true, section: 'payment-option' };
                     }
                     
                     return { clicked: false };
@@ -533,10 +521,66 @@ class GarenaAutomation {
                 log('error', `Error clicking Login: ${e.message}`);
             }
             
-            // Wait for navigation or new page
-            log('info', 'Waiting for navigation or new page...');
+            // Wait for navigation or modal
+            log('info', 'Waiting for navigation or modal...');
+            await humanDelay(3000, 5000);
             
-            // First wait for potential new page
+            // Check if a Free Fire login modal appeared (which is wrong - we need Garena SSO)
+            const modalCheck = await this.page.evaluate(() => {
+                // Look for modal close button or modal overlay
+                const closeButtons = document.querySelectorAll('button[aria-label="Close"], .close, .modal-close, [data-dismiss="modal"]');
+                const modalOverlay = document.querySelector('.modal, .overlay, [role="dialog"]');
+                
+                // Check if modal contains "Free Fire" login
+                if (modalOverlay) {
+                    const modalText = modalOverlay.textContent || '';
+                    if (modalText.includes('Player ID') && modalText.includes('Free Fire')) {
+                        // This is the wrong modal - we need to close it or interact differently
+                        return { hasModal: true, type: 'freefire_login' };
+                    }
+                }
+                
+                return { hasModal: false };
+            });
+            
+            if (modalCheck.hasModal && modalCheck.type === 'freefire_login') {
+                log('info', 'Free Fire login modal appeared - this is for re-authentication');
+                
+                // Take a screenshot of the modal
+                screenshot = await takeScreenshot(this.page, '12c_modal_appeared');
+                if (screenshot) this.screenshots.push(screenshot);
+                
+                // Try to close the modal by clicking outside or clicking close button
+                const modalClosed = await this.page.evaluate(() => {
+                    // Try clicking close button
+                    const closeBtn = document.querySelector('button[aria-label="Close"], .close, .modal-close, [data-dismiss="modal"], svg[class*="close"]');
+                    if (closeBtn) {
+                        closeBtn.click();
+                        return { closed: true, method: 'close button' };
+                    }
+                    
+                    // Try clicking modal overlay to close
+                    const overlay = document.querySelector('.modal-backdrop, .overlay');
+                    if (overlay) {
+                        overlay.click();
+                        return { closed: true, method: 'overlay click' };
+                    }
+                    
+                    return { closed: false };
+                });
+                
+                if (modalClosed.closed) {
+                    log('info', `Modal closed using: ${modalClosed.method}`);
+                    await humanDelay(1000, 2000);
+                } else {
+                    log('warning', 'Could not close modal, trying to interact with it');
+                    
+                    // If we can't close, maybe we need to login through it
+                    // The modal wants Player ID again
+                }
+            }
+            
+            // Wait for new page
             const newPage = await pagePromise;
             
             if (newPage) {
@@ -551,8 +595,8 @@ class GarenaAutomation {
                     log('warning', `Error setting up new page: ${e.message}`);
                 }
             } else {
-                // No new page - check if current page navigated
-                await humanDelay(5000, 7000);
+                // No new page - check current page state
+                await humanDelay(3000, 5000);
                 
                 try {
                     // Check all pages
@@ -575,7 +619,6 @@ class GarenaAutomation {
                         }
                     }
                     
-                    // Get current page URL
                     currentUrl = this.page.url();
                     log('info', `Current page URL after wait: ${currentUrl}`);
                 } catch (e) {
