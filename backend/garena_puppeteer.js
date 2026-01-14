@@ -480,113 +480,64 @@ class GarenaAutomation {
     
     async clickLoginButtonWithMouseEvents() {
         try {
-            // Find the CORRECT login button (the one for Player ID, not UniPin)
-            // The primary selector is button[data-testid="login-btn"]
-            const buttonSelectors = [
-                'button[data-testid="login-btn"]',
-                'button[class*="login"]'
-            ];
+            // Find the CORRECT login button (the one next to Player ID input)
+            // It should be at the same Y position as the Player ID input
             
-            let buttonBox = null;
-            let foundSelector = '';
-            
-            // First try to find by specific selectors
-            for (const selector of buttonSelectors) {
-                try {
-                    const btn = await this.page.$(selector);
-                    if (btn) {
-                        buttonBox = await btn.boundingBox();
-                        if (buttonBox) {
-                            foundSelector = selector;
-                            log('info', `Found Login button with selector: ${selector}`);
-                            break;
-                        }
-                    }
-                } catch (e) {
-                    continue;
-                }
-            }
-            
-            // If not found, look for Login buttons in the Login section (Section 1)
-            if (!buttonBox) {
-                const buttonInfo = await this.page.evaluate(() => {
-                    // Find all buttons with "Login" text
-                    const allButtons = document.querySelectorAll('button');
-                    const loginButtons = [];
-                    
-                    for (const btn of allButtons) {
-                        const text = (btn.textContent || '').trim().toLowerCase();
-                        if (text === 'login' && !btn.disabled) {
-                            const rect = btn.getBoundingClientRect();
-                            const section = btn.closest('section, div[class*="login"], div[class*="Login"]');
-                            const sectionText = section ? section.textContent.substring(0, 100) : '';
-                            
+            const buttonInfo = await this.page.evaluate(() => {
+                // First, find the Player ID input position
+                const playerIdInput = document.querySelector('input[placeholder*="player" i], input[name="user_id"]');
+                const inputY = playerIdInput ? playerIdInput.getBoundingClientRect().y : 0;
+                
+                // Find all Login buttons
+                const allButtons = document.querySelectorAll('button');
+                const loginButtons = [];
+                
+                for (const btn of allButtons) {
+                    const text = (btn.textContent || '').trim().toLowerCase();
+                    if (text === 'login' && !btn.disabled) {
+                        const rect = btn.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) {  // Only visible buttons
                             loginButtons.push({
                                 x: rect.x,
                                 y: rect.y,
                                 width: rect.width,
                                 height: rect.height,
-                                isInLoginSection: sectionText.includes('Player ID') || sectionText.includes('login with your game account'),
-                                isInPaymentSection: sectionText.includes('UniPin') || sectionText.includes('Payment') || sectionText.includes('Top-Up Amount'),
-                                sectionPreview: sectionText.substring(0, 50)
+                                distanceFromInput: Math.abs(rect.y - inputY),
+                                classes: btn.className,
+                                testId: btn.getAttribute('data-testid')
                             });
                         }
                     }
-                    
-                    // Prefer button in Login section, not Payment section
-                    for (const btn of loginButtons) {
-                        if (btn.isInLoginSection && !btn.isInPaymentSection) {
-                            return btn;
-                        }
-                    }
-                    
-                    // If no button in Login section, return the first one that's NOT in payment section
-                    for (const btn of loginButtons) {
-                        if (!btn.isInPaymentSection) {
-                            return btn;
-                        }
-                    }
-                    
-                    // Last resort: return first button found
-                    return loginButtons.length > 0 ? loginButtons[0] : null;
-                });
-                
-                if (buttonInfo) {
-                    buttonBox = buttonInfo;
-                    log('info', `Found Login button via page.evaluate (in section: ${buttonInfo.sectionPreview || 'unknown'})`);
-                    if (buttonInfo.isInPaymentSection) {
-                        log('warning', 'Warning: Button appears to be in Payment section, not Login section');
-                    }
                 }
-            }
+                
+                // Sort by distance from Player ID input - closest first
+                loginButtons.sort((a, b) => a.distanceFromInput - b.distanceFromInput);
+                
+                // Return the closest Login button to the Player ID input
+                if (loginButtons.length > 0) {
+                    const closest = loginButtons[0];
+                    return {
+                        ...closest,
+                        inputY: inputY,
+                        totalButtons: loginButtons.length
+                    };
+                }
+                
+                return null;
+            });
             
-            if (!buttonBox) {
-                log('error', 'Could not find Login button');
-                
-                // Take screenshot to debug
-                const screenshot = await takeScreenshot(this.page, 'debug_no_login_button');
-                if (screenshot) this.screenshots.push(screenshot);
-                
-                // Log all buttons on page for debugging
-                const allButtons = await this.page.evaluate(() => {
-                    const btns = document.querySelectorAll('button');
-                    return Array.from(btns).map(b => ({
-                        text: b.textContent.trim().substring(0, 30),
-                        testId: b.getAttribute('data-testid'),
-                        classes: b.className.substring(0, 50),
-                        rect: b.getBoundingClientRect()
-                    }));
-                });
-                log('info', `All buttons on page: ${JSON.stringify(allButtons.slice(0, 5))}`);
-                
+            if (!buttonInfo) {
+                log('error', 'Could not find any Login button');
                 return false;
             }
             
-            // Calculate center of button
-            const centerX = buttonBox.x + buttonBox.width / 2;
-            const centerY = buttonBox.y + buttonBox.height / 2;
+            log('info', `Found ${buttonInfo.totalButtons} Login button(s). Using closest to input (Y=${buttonInfo.y.toFixed(0)}, inputY=${buttonInfo.inputY.toFixed(0)}, distance=${buttonInfo.distanceFromInput.toFixed(0)}px)`);
             
-            log('info', `Clicking Login button at (${centerX}, ${centerY}) with mouse events...`);
+            // Calculate center of button
+            const centerX = buttonInfo.x + buttonInfo.width / 2;
+            const centerY = buttonInfo.y + buttonInfo.height / 2;
+            
+            log('info', `Clicking Login button at (${centerX.toFixed(0)}, ${centerY.toFixed(0)}) with mouse events...`);
             
             // MANDATORY CLICK SEQUENCE:
             // 1. mousemove to center of button
